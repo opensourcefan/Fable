@@ -498,8 +498,9 @@
   font-weight: 700;
 
   &--warning {
-    background: color-mix(in srgb, #f59e0b 18%, var(--card-background));
-    color: #b45309;
+    // Text-only alert — no fill (matches outside-view hint severity without a chip blotch).
+    background: transparent;
+    color: #ef4444;
   }
 }
 
@@ -512,10 +513,11 @@
   align-items: center;
   gap: 0.35rem;
   margin-top: 0;
-  padding: 0.3rem 0.55rem;
-  border-radius: 0.5rem;
-  background: color-mix(in srgb, #f59e0b 12%, var(--card-background));
-  color: #92400e;
+  padding: 0.2rem 0.45rem;
+  border-radius: 0.4rem;
+  border: 1px solid color-mix(in srgb, #ef4444 45%, transparent);
+  background: transparent;
+  color: #ef4444;
   font-size: 0.78rem;
   font-weight: 600;
   line-height: 1.15;
