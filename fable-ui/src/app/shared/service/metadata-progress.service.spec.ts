@@ -117,4 +117,32 @@ describe('MetadataProgressService dismissal', () => {
     service.handleIncomingProgress(progress({taskId: 'persisted-task'}));
     expect(service.getActiveTasks()).toEqual({});
   });
+
+  it('dismissFinishedTasks clears completed cards and leaves in-progress alone', () => {
+    setup();
+    service.handleIncomingProgress(progress({
+      taskId: 'done-1',
+      status: MetadataBatchStatus.COMPLETED,
+      completed: 1,
+    }));
+    service.handleIncomingProgress(progress({
+      taskId: 'err-1',
+      status: MetadataBatchStatus.ERROR,
+    }));
+    service.handleIncomingProgress(progress({
+      taskId: 'run-1',
+      status: MetadataBatchStatus.IN_PROGRESS,
+    }));
+
+    expect(service.hasFinishedTasks()).toBe(true);
+    expect(service.dismissFinishedTasks()).toBe(2);
+
+    const remaining = service.getActiveTasks();
+    expect(Object.keys(remaining)).toEqual(['run-1']);
+    expect(service.hasFinishedTasks()).toBe(false);
+    expect(localStorageMock.trySet).toHaveBeenCalledWith(
+      'bl-dismissed-metadata-task-ids',
+      expect.arrayContaining(['done-1', 'err-1'])
+    );
+  });
 });

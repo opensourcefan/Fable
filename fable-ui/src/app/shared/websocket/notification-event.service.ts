@@ -60,6 +60,20 @@ export class NotificationEventService {
     this.latestNotificationSubject.next(null);
   }
 
+  /** Apply a delete that happened in another browser session. */
+  applyRemoteDelete(id: number): void {
+    this.removeHistoricalById(Number(id));
+  }
+
+  /** Apply a clear-all that happened in another browser session. */
+  applyRemoteClearAll(): void {
+    this.fetchGeneration++;
+    this.historicalNotificationsSubject.next([]);
+    this.latestNotificationSubject.next(null);
+    this.notificationHighlightSubject.next(false);
+    this.unreadFailureCountSubject.next(0);
+  }
+
   fetchHistoricalNotifications(): void {
     const generation = ++this.fetchGeneration;
     this.http.get<LogNotification[]>(`${API_CONFIG.BASE_URL}/api/v1/notifications/recent?limit=50`)

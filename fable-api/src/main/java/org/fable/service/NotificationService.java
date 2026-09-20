@@ -59,6 +59,21 @@ public class NotificationService {
         }
     }
 
+    /** Fan-out to every account (e.g. admin wiped the shared failure inbox). */
+    @Transactional(readOnly = true)
+    public void sendMessageToAllUsers(Topic topic, Object message) {
+        try {
+            List<String> usernames = entityManager
+                    .createQuery("SELECT u.username FROM FableUserEntity u", String.class)
+                    .getResultList();
+            for (String username : usernames) {
+                messagingTemplate.convertAndSendToUser(username, topic.getPath(), message);
+            }
+        } catch (Exception e) {
+            log.error("Error sending message to all users on topic {}: {}", topic, e.getMessage(), e);
+        }
+    }
+
     private List<String> findUsernamesWithPermissions(Set<PermissionType> permissionTypes) {
         String conditions = permissionTypes.stream()
                 .map(p -> "p." + p.getEntityField() + " = true")

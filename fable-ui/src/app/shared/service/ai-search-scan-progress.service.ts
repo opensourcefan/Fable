@@ -42,7 +42,31 @@ export class AiSearchScanProgressService {
   }
 
   clearProgress(): void {
+    if (this.clearTimer) {
+      clearTimeout(this.clearTimer);
+      this.clearTimer = undefined;
+    }
     this.progressSubject.next(null);
+  }
+
+  /** True when a finished BATCH card is visible and can be dismissed. */
+  hasDismissableFinishedBatch(): boolean {
+    if (this.isStoppingSubject.value) {
+      return false;
+    }
+    const progress = this.progressSubject.value;
+    return !!progress
+      && progress.mode === 'BATCH'
+      && (progress.event === 'COMPLETED' || progress.event === 'FAILED' || progress.event === 'STOPPED');
+  }
+
+  /** Dismiss a finished BATCH card; no-op while running or stopping. */
+  dismissFinishedBatch(): boolean {
+    if (!this.hasDismissableFinishedBatch()) {
+      return false;
+    }
+    this.clearProgress();
+    return true;
   }
 
   handleIncomingProgress(progress: AiSearchProgressPayload): void {

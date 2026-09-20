@@ -120,6 +120,38 @@ export class MetadataProgressService implements OnDestroy {
     this.activeTasksSubject.next(this.getActiveTasks());
   }
 
+  /** True when at least one finished (non-running) task card is visible. */
+  hasFinishedTasks(): boolean {
+    for (const task of this.progressMap.values()) {
+      if (task.getValue().status !== 'IN_PROGRESS') {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Dismiss every finished task card (COMPLETED / ERROR / CANCELLED).
+   * Leaves IN_PROGRESS cards alone; does not cancel work or delete review proposals.
+   */
+  dismissFinishedTasks(): number {
+    const finishedIds: string[] = [];
+    this.progressMap.forEach((subject, taskId) => {
+      if (subject.getValue().status !== 'IN_PROGRESS') {
+        finishedIds.push(taskId);
+      }
+    });
+    for (const taskId of finishedIds) {
+      this.dismissedTaskIds.add(taskId);
+      this.progressMap.delete(taskId);
+    }
+    if (finishedIds.length > 0) {
+      this.persistDismissedTaskIds();
+      this.activeTasksSubject.next(this.getActiveTasks());
+    }
+    return finishedIds.length;
+  }
+
   getActiveTasks(): Record<string, MetadataBatchProgressNotification> {
     const result: Record<string, MetadataBatchProgressNotification> = {};
     this.progressMap.forEach((subject, taskId) => {

@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -79,17 +80,21 @@ public class LogNotificationService {
         log.info("Deleted log notifications for userId={}", userId);
     }
 
+    /**
+     * Deletes a visible inbox row. Returns the deleted entity when removal succeeded
+     * so callers can broadcast a sync event to other sessions.
+     */
     @Transactional
-    public boolean deleteByIdForUser(Long id, Long userId, boolean allowSystem) {
-        return repository.findById(id).map(entity -> {
+    public Optional<LogNotificationEntity> deleteByIdForUser(Long id, Long userId, boolean allowSystem) {
+        return repository.findById(id).flatMap(entity -> {
             boolean owns = userId != null && userId.equals(entity.getTriggeredByUserId());
             boolean systemOk = allowSystem && entity.getTriggeredByUserId() == null;
             if (!owns && !systemOk) {
-                return false;
+                return Optional.empty();
             }
             repository.delete(entity);
-            return true;
-        }).orElse(false);
+            return Optional.of(entity);
+        });
     }
 
     public LogNotification toDto(LogNotificationEntity entity) {

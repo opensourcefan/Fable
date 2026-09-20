@@ -75,4 +75,29 @@ describe('NotificationEventService', () => {
     expect(latestHistorical).toHaveLength(0);
     expect(latestCount).toBe(0);
   });
+
+  it('applies remote delete and clear-all without an HTTP round-trip', () => {
+    setup();
+    service.handleNewNotification({
+      id: 11,
+      message: 'Remote boom',
+      severity: Severity.ERROR,
+      timestamp: '2026-07-21T02:00:00.000Z',
+    });
+    expect(latestHistorical).toHaveLength(1);
+
+    service.applyRemoteDelete(11);
+    expect(latestHistorical).toHaveLength(0);
+    expect(latestCount).toBe(0);
+
+    service.handleNewNotification({
+      id: 12,
+      message: 'Another',
+      severity: Severity.WARN,
+      timestamp: '2026-07-21T03:00:00.000Z',
+    });
+    service.applyRemoteClearAll();
+    expect(latestHistorical).toHaveLength(0);
+    expect(latestCount).toBe(0);
+  });
 });

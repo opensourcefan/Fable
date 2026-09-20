@@ -64,6 +64,17 @@ export class UnifiedNotificationBoxComponent {
     map(tasks => Object.keys(tasks).length > 0)
   );
 
+  hasClearableFinishedTasks$ = combineLatest([
+    this.metadataProgressService.activeTasks$,
+    this.aiSearchScanProgressService.progress$,
+    this.aiSearchScanProgressService.isStopping$
+  ]).pipe(
+    map(([tasks]) =>
+      Object.values(tasks).some(task => task.status !== 'IN_PROGRESS')
+      || this.aiSearchScanProgressService.hasDismissableFinishedBatch()),
+    startWith(false)
+  );
+
   hasPendingBookdropFiles$ = this.bookdropFileService.hasPendingFiles$;
 
   hasAiSearchScan$ = combineLatest([
@@ -101,4 +112,9 @@ export class UnifiedNotificationBoxComponent {
   );
 
   failureCount$ = this.notificationEventService.unreadFailureCount$;
+
+  clearFinishedTasks(): void {
+    this.metadataProgressService.dismissFinishedTasks();
+    this.aiSearchScanProgressService.dismissFinishedBatch();
+  }
 }

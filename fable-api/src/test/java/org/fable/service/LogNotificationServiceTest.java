@@ -41,7 +41,7 @@ class LogNotificationServiceTest {
                 .build();
         when(repository.findById(42L)).thenReturn(Optional.of(entity));
 
-        assertTrue(service.deleteByIdForUser(42L, 9L, false));
+        assertTrue(service.deleteByIdForUser(42L, 9L, false).isPresent());
         verify(repository).delete(entity);
     }
 
@@ -56,7 +56,7 @@ class LogNotificationServiceTest {
                 .build();
         when(repository.findById(42L)).thenReturn(Optional.of(entity));
 
-        assertFalse(service.deleteByIdForUser(42L, 3L, true));
+        assertTrue(service.deleteByIdForUser(42L, 3L, true).isEmpty());
         verify(repository, never()).delete(any());
     }
 
@@ -71,7 +71,7 @@ class LogNotificationServiceTest {
                 .build();
         when(repository.findById(7L)).thenReturn(Optional.of(entity));
 
-        assertTrue(service.deleteByIdForUser(7L, 1L, true));
+        assertTrue(service.deleteByIdForUser(7L, 1L, true).isPresent());
         verify(repository).delete(entity);
     }
 

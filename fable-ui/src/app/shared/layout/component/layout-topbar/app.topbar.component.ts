@@ -578,6 +578,7 @@ export class AppTopBarComponent implements OnDestroy {
   }
 
   onNotificationPopoverShow(): void {
+    this.notificationService.fetchHistoricalNotifications();
     if (this.mobileNotificationBackHandle) {
       return;
     }

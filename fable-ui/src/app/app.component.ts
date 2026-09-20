@@ -4,7 +4,7 @@ import {environment} from '../environments/environment';
 import {RxStompService} from './shared/websocket/rx-stomp.service';
 import {BookService} from './features/book/service/book.service';
 import {NotificationEventService} from './shared/websocket/notification-event.service';
-import {parseLogNotification} from './shared/websocket/model/log-notification.model';
+import {parseLogNotification, parseLogNotificationSyncEvent} from './shared/websocket/model/log-notification.model';
 import {ConfirmDialog} from 'primeng/confirmdialog';
 import {Toast} from 'primeng/toast';
 import {NavigationEnd, Router, RouterOutlet} from '@angular/router';
@@ -217,6 +217,15 @@ export class AppComponent implements OnInit, OnDestroy {
     );
     this.subscriptions.push(
       this.rxStompService.watch('/user/queue/log').subscribe(msg => {
+        const sync = parseLogNotificationSyncEvent(msg.body);
+        if (sync?.action === 'DELETED' && sync.id != null) {
+          this.notificationEventService.applyRemoteDelete(sync.id);
+          return;
+        }
+        if (sync?.action === 'CLEARED') {
+          this.notificationEventService.applyRemoteClearAll();
+          return;
+        }
         const logNotification = parseLogNotification(msg.body);
         this.notificationEventService.handleNewNotification(logNotification);
       })

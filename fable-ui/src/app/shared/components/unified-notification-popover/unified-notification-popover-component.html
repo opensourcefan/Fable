@@ -14,6 +14,20 @@
     <p-tabpanels>
       <p-tabpanel value="0">
         <div class="tasks-panel">
+          @if (hasClearableFinishedTasks$ | async) {
+            <div class="tasks-header-row">
+              <div class="tasks-header">{{ t('bellTasksFinishedLabel') }}</div>
+              <button
+                class="clear-finished-btn"
+                type="button"
+                (click)="clearFinishedTasks()"
+                [attr.aria-label]="t('bellTasksClearFinishedAria')"
+                [attr.title]="t('bellTasksClearFinishedAria')">
+                <i class="pi pi-times-circle" aria-hidden="true"></i>
+                <span>{{ t('bellTasksClearFinished') }}</span>
+              </button>
+            </div>
+          }
           @if (hasRunningTasks$ | async; as hasTasks) {
             @if (hasTasks) {
               @if (hasMetadataTasks$ | async) {

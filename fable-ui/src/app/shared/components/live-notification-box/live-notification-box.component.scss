@@ -101,7 +101,7 @@
   letter-spacing: 0.05em;
 }
 
-.dismiss-all-btn {
+  .dismiss-all-btn {
   background: transparent;
   border: 1px solid color-mix(in srgb, var(--text-color, #fff) 12%, transparent);
   color: var(--text-color-secondary, var(--p-text-muted-color, #94a3b8));
@@ -115,6 +115,7 @@
   font-weight: 500;
   transition: background-color 0.2s, color 0.2s, border-color 0.2s;
   flex-shrink: 0;
+  min-height: 1.75rem;
 
   &:hover {
     color: var(--text-color, var(--p-text-color, #e2e8f0));
@@ -162,5 +163,15 @@
 
   .historical-item {
     padding: 0.75rem;
+  }
+
+  .dismiss-all-btn {
+    min-width: 36px;
+    min-height: 36px;
+    padding: 0.35rem 0.55rem;
+  }
+
+  .historical-header-row {
+    gap: 0.5rem;
   }
 }
