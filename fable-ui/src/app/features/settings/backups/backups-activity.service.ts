@@ -22,6 +22,13 @@ export interface DatabaseBackupActivity {
   timestamp: string;
 }
 
+export interface DatabaseBackupConfig {
+  containerName?: string;
+  databaseName?: string;
+  databaseUser?: string;
+  backupDirectory?: string;
+}
+
 @Injectable({providedIn: 'root'})
 export class BackupsActivityService {
   private readonly localStorageService = inject(LocalStorageService);
@@ -29,6 +36,7 @@ export class BackupsActivityService {
   private readonly appSettingsKey = 'settingsBackupsAppSettingsActivity';
   private readonly sidecarKey = 'settingsBackupsSidecarActivity';
   private readonly databaseKey = 'settingsBackupsDatabaseActivity';
+  private readonly databaseConfigKey = 'settingsBackupsDatabaseConfig';
 
   getAppSettingsActivity(): AppSettingsBackupActivity | null {
     return this.localStorageService.get<AppSettingsBackupActivity>(this.appSettingsKey);
@@ -52,5 +60,13 @@ export class BackupsActivityService {
 
   setDatabaseActivity(activity: DatabaseBackupActivity): void {
     this.localStorageService.set(this.databaseKey, activity);
+  }
+
+  getDatabaseConfig(): DatabaseBackupConfig | null {
+    return this.localStorageService.get<DatabaseBackupConfig>(this.databaseConfigKey);
+  }
+
+  setDatabaseConfig(config: DatabaseBackupConfig): void {
+    this.localStorageService.set(this.databaseConfigKey, config);
   }
 }

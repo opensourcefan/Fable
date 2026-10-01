@@ -363,8 +363,24 @@
 
                       <div class="field-grid">
                         <label>
+                          <span>{{ t('settingsBackups.databaseExport.containerName') }}</span>
+                          <input [(ngModel)]="dbContainerName" (ngModelChange)="onDbConfigChange()" type="text">
+                        </label>
+                        <label>
+                          <span>{{ t('settingsBackups.databaseExport.databaseName') }}</span>
+                          <input [(ngModel)]="dbName" (ngModelChange)="onDbConfigChange()" type="text">
+                        </label>
+                        <label>
+                          <span>{{ t('settingsBackups.databaseExport.dbUser') }}</span>
+                          <input [(ngModel)]="dbUser" (ngModelChange)="onDbConfigChange()" type="text">
+                        </label>
+                        <label>
+                          <span>{{ t('settingsBackups.databaseExport.dbPassword') }}</span>
+                          <input [(ngModel)]="dbPassword" type="password" [placeholder]="t('settingsBackups.databaseExport.dbPasswordPlaceholder')">
+                        </label>
+                        <label>
                           <span>{{ t('settingsBackups.databaseExport.directory') }}</span>
-                          <input [(ngModel)]="backupDirectory" type="text">
+                          <input [(ngModel)]="backupDirectory" (ngModelChange)="onDbConfigChange()" type="text">
                         </label>
                         <label>
                           <span>{{ t('settingsBackups.databaseExport.fileName') }}</span>
@@ -426,6 +442,22 @@
                       </div>
 
                       <div class="field-grid">
+                        <label>
+                          <span>{{ t('settingsBackups.databaseExport.containerName') }}</span>
+                          <input [(ngModel)]="dbContainerName" (ngModelChange)="onDbConfigChange()" type="text">
+                        </label>
+                        <label>
+                          <span>{{ t('settingsBackups.databaseExport.databaseName') }}</span>
+                          <input [(ngModel)]="dbName" (ngModelChange)="onDbConfigChange()" type="text">
+                        </label>
+                        <label>
+                          <span>{{ t('settingsBackups.databaseExport.dbUser') }}</span>
+                          <input [(ngModel)]="dbUser" (ngModelChange)="onDbConfigChange()" type="text">
+                        </label>
+                        <label>
+                          <span>{{ t('settingsBackups.databaseExport.dbPassword') }}</span>
+                          <input [(ngModel)]="dbPassword" type="password" [placeholder]="t('settingsBackups.databaseExport.dbPasswordPlaceholder')">
+                        </label>
                         <label>
                           <span>{{ t('settingsBackups.databaseRestore.sqlPath') }}</span>
                           <input [(ngModel)]="restoreSqlPath" type="text">

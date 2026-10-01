@@ -87,6 +87,10 @@ export class BackupsComponent implements OnInit {
 
   backupDirectory = '$HOME/fable-backups';
   backupFileName = '';
+  dbContainerName = 'mariadb';
+  dbName = 'fable';
+  dbUser = 'fable';
+  dbPassword = '';
 
   restoreSqlPath = '$HOME/fable-backups/fable_backup_20260414_020000.sql';
   restoreAppDataPath = '/srv/fable/data';
@@ -108,6 +112,7 @@ export class BackupsComponent implements OnInit {
   }
 
   ngOnInit(): void {
+    this.loadDatabaseConfig();
     this.backupFileName = this.buildDefaultBackupFileName();
     this.refreshActivitySnapshots();
     this.loadLibraries();
@@ -123,6 +128,33 @@ export class BackupsComponent implements OnInit {
         }
       }
     });
+  }
+
+  onDbConfigChange(): void {
+    this.backupsActivityService.setDatabaseConfig({
+      containerName: this.dbContainerName,
+      databaseName: this.dbName,
+      databaseUser: this.dbUser,
+      backupDirectory: this.backupDirectory
+    });
+  }
+
+  private loadDatabaseConfig(): void {
+    const config = this.backupsActivityService.getDatabaseConfig();
+    if (config) {
+      if (config.containerName !== undefined) {
+        this.dbContainerName = config.containerName;
+      }
+      if (config.databaseName !== undefined) {
+        this.dbName = config.databaseName;
+      }
+      if (config.databaseUser !== undefined) {
+        this.dbUser = config.databaseUser;
+      }
+      if (config.backupDirectory !== undefined) {
+        this.backupDirectory = config.backupDirectory;
+      }
+    }
   }
 
   canManageAppSettings(user: BackupAccessUser | null | undefined): boolean {
@@ -156,11 +188,25 @@ export class BackupsComponent implements OnInit {
   }
 
   getDatabaseExportCommand(): string {
-    return `mkdir -p "${this.getNormalizedBackupDirectory()}" && docker exec mariadb mariadb-dump --single-transaction --quick --no-tablespaces -u fable -p fable > "${this.getDatabaseOutputPath()}"`;
+    const container = this.dbContainerName.trim() || 'mariadb';
+    const user = this.dbUser.trim() || 'fable';
+    const db = this.dbName.trim() || 'fable';
+    const passwordArg = this.dbPassword.trim()
+      ? `-p"${this.dbPassword.trim()}"`
+      : '-p"$DB_PASSWORD"';
+
+    return `mkdir -p "${this.getNormalizedBackupDirectory()}" && docker exec ${container} mariadb-dump --single-transaction --quick --no-tablespaces -u ${user} ${passwordArg} ${db} > "${this.getDatabaseOutputPath()}"`;
   }
 
   getDatabaseRestoreCommand(): string {
-    return `docker exec -i mariadb mariadb -u fable -p fable < "${this.restoreSqlPath}"`;
+    const container = this.dbContainerName.trim() || 'mariadb';
+    const user = this.dbUser.trim() || 'fable';
+    const db = this.dbName.trim() || 'fable';
+    const passwordArg = this.dbPassword.trim()
+      ? `-p"${this.dbPassword.trim()}"`
+      : '-p"$DB_PASSWORD"';
+
+    return `docker exec -i ${container} mariadb -u ${user} ${passwordArg} ${db} < "${this.restoreSqlPath}"`;
   }
 
   onAvailableSpaceChange(value: string | number | null): void {

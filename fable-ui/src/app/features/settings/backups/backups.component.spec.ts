@@ -207,13 +207,45 @@ describe('BackupsComponent', () => {
     expect(component.getSidecarStatusTone()).toBe('fail');
   });
 
-  it('builds the export command with mkdir -p for the destination folder', () => {
+  it('builds the export command with mkdir -p for the destination folder and proper password syntax', () => {
     component.backupDirectory = '/srv/fable/backups';
     component.backupFileName = 'fable_backup.sql';
+    component.dbContainerName = 'mariadb';
+    component.dbUser = 'booklore';
+    component.dbName = 'booklore';
+    component.dbPassword = 'secret';
 
     expect(component.getDatabaseExportCommand()).toBe(
-      'mkdir -p "/srv/fable/backups" && docker exec mariadb mariadb-dump --single-transaction --quick --no-tablespaces -u fable -p fable > "/srv/fable/backups/fable_backup.sql"'
+      'mkdir -p "/srv/fable/backups" && docker exec mariadb mariadb-dump --single-transaction --quick --no-tablespaces -u booklore -p"secret" booklore > "/srv/fable/backups/fable_backup.sql"'
     );
+  });
+
+  it('builds the export command with default environment variable placeholder when password is blank', () => {
+    component.backupDirectory = '/srv/fable/backups';
+    component.backupFileName = 'fable_backup.sql';
+    component.dbContainerName = 'mariadb';
+    component.dbUser = 'fable';
+    component.dbName = 'fable';
+    component.dbPassword = '';
+
+    expect(component.getDatabaseExportCommand()).toBe(
+      'mkdir -p "/srv/fable/backups" && docker exec mariadb mariadb-dump --single-transaction --quick --no-tablespaces -u fable -p"$DB_PASSWORD" fable > "/srv/fable/backups/fable_backup.sql"'
+    );
+  });
+
+  it('saves database configuration to local storage on change', () => {
+    component.dbContainerName = 'custom-db';
+    component.dbName = 'booklore';
+    component.dbUser = 'booklore';
+    component.backupDirectory = '/custom/backups';
+    component.onDbConfigChange();
+
+    expect(storage['settingsBackupsDatabaseConfig']).toEqual({
+      containerName: 'custom-db',
+      databaseName: 'booklore',
+      databaseUser: 'booklore',
+      backupDirectory: '/custom/backups'
+    });
   });
 
   it('keeps available free space empty until a real number is entered', () => {
@@ -241,7 +273,7 @@ describe('BackupsComponent', () => {
 
     expect(component.restoreReady).toBe(true);
     expect(clipboardWriteText).toHaveBeenCalledWith(
-      'docker exec -i mariadb mariadb -u fable -p fable < "/tmp/fable_backup.sql"'
+      'docker exec -i mariadb mariadb -u fable -p"$DB_PASSWORD" fable < "/tmp/fable_backup.sql"'
     );
     expect(auditLogServiceMock.recordDatabaseHelperAction).toHaveBeenCalledWith(
       'DATABASE_RESTORE_PREFLIGHT_PASSED',
