@@ -106,6 +106,7 @@ public class SidecarController {
                 "message", "Library sidecar backup completed",
                 "attempted", result.attempted(),
                 "exported", result.exported(),
+                "pruned", result.pruned(),
                 "failed", result.failed(),
                 "firstError", result.firstError() == null ? "" : result.firstError()
         ));

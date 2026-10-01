@@ -389,10 +389,17 @@ export class BackupsComponent implements OnInit {
           return;
         }
 
+        const detailKey = (response.pruned && response.pruned > 0)
+          ? 'settingsMeta.persistence.sidecarBackupSuccessWithPruned'
+          : 'settingsMeta.persistence.sidecarBackupSuccess';
+
         this.messageService.add({
           severity: 'success',
           summary: this.translocoService.translate('common.success'),
-          detail: this.translocoService.translate('settingsMeta.persistence.sidecarBackupSuccess', {count: response.exported})
+          detail: this.translocoService.translate(detailKey, {
+            count: response.exported,
+            pruned: response.pruned
+          })
         });
       },
       error: () => {

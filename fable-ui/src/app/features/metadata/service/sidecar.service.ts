@@ -78,6 +78,7 @@ export interface SidecarBackupHistoryEntry {
   status: SidecarBackupHistoryStatus;
   attempted: number;
   exported: number;
+  pruned?: number;
   failed: number;
   firstError: string | null;
   description: string;
@@ -115,8 +116,8 @@ export class SidecarService {
     );
   }
 
-  backupLibrarySidecars(libraryId: number): Observable<{message: string, attempted: number, exported: number, failed: number, firstError: string}> {
-    return this.http.post<{message: string, attempted: number, exported: number, failed: number, firstError: string}>(
+  backupLibrarySidecars(libraryId: number): Observable<{message: string, attempted: number, exported: number, pruned?: number, failed: number, firstError: string}> {
+    return this.http.post<{message: string, attempted: number, exported: number, pruned?: number, failed: number, firstError: string}>(
       `${this.apiUrl}/libraries/${libraryId}/sidecar/backup`, {}
     );
   }

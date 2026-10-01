@@ -263,6 +263,10 @@
                           <span class="result-value">{{ getLatestSidecarHistoryEntry()?.exported ?? 0 }}</span>
                         </div>
                         <div class="result-card">
+                          <span class="result-label">{{ t('settingsBackups.sidecar.pruned') }}</span>
+                          <span class="result-value">{{ getLatestSidecarHistoryEntry()?.pruned ?? 0 }}</span>
+                        </div>
+                        <div class="result-card">
                           <span class="result-label">{{ t('settingsBackups.sidecar.failed') }}</span>
                           <span class="result-value">{{ getLatestSidecarHistoryEntry()?.failed ?? 0 }}</span>
                         </div>
@@ -318,6 +322,10 @@
                                   <div>
                                     <span class="result-label">{{ t('settingsBackups.sidecar.exported') }}</span>
                                     <span class="result-value">{{ entry.exported }}</span>
+                                  </div>
+                                  <div>
+                                    <span class="result-label">{{ t('settingsBackups.sidecar.pruned') }}</span>
+                                    <span class="result-value">{{ entry.pruned ?? 0 }}</span>
                                   </div>
                                   <div>
                                     <span class="result-label">{{ t('settingsBackups.sidecar.failed') }}</span>

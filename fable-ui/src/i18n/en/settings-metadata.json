@@ -61,6 +61,7 @@
     "sidecarBackupBtn": "Back Up Sidecars to Library",
     "sidecarBackupNoLibraries": "Create a library first to use sidecar backup.",
     "sidecarBackupSuccess": "Backed up sidecar files for {{count}} books in the selected library.",
+    "sidecarBackupSuccessWithPruned": "Backed up sidecar files for {{count}} books and cleaned up {{pruned}} orphaned records in the selected library.",
     "sidecarBackupPartial": "Backed up sidecar files for {{count}} books, but {{failed}} of {{attempted}} writes failed. First error: {{error}}",
     "sidecarBackupFailureDetail": "No sidecar files were backed up. {{failed}} of {{attempted}} writes failed. First error: {{error}}",
     "sidecarBackupUnknownError": "No detailed filesystem error was returned.",

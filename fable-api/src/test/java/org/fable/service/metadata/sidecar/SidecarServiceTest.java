@@ -8,6 +8,7 @@ import org.fable.repository.AuditLogRepository;
 import org.fable.repository.BookRepository;
 import org.fable.repository.LibraryRepository;
 import org.fable.service.audit.AuditService;
+import org.fable.service.library.BookDeletionService;
 import org.fable.service.metadata.BookMetadataUpdater;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -51,6 +52,9 @@ class SidecarServiceTest {
 
     @Mock
     private AuditService auditService;
+
+    @Mock
+    private BookDeletionService bookDeletionService;
 
     @InjectMocks
     private SidecarService sidecarService;
@@ -136,6 +140,38 @@ class SidecarServiceTest {
             "Library",
             9L,
             "Sidecar backup for library 'Failure Library' (attempted=2, exported=1, failed=1). First error: Permission denied while writing /library/book.metadata.json"
+        );
+    }
+
+    @Test
+    void backupLibrarySidecars_prunesMissingBooksAndReportsPrunedCount() {
+        LibraryEntity library = new LibraryEntity();
+        library.setId(10L);
+        library.setName("Prune Library");
+
+        BookEntity activeBook = new BookEntity();
+        activeBook.setId(50L);
+        BookEntity missingBook = new BookEntity();
+        missingBook.setId(51L);
+
+        when(libraryRepository.findById(10L)).thenReturn(Optional.of(library));
+        when(bookRepository.findAllForMetadataFlushByLibraryId(10L)).thenReturn(List.of(activeBook, missingBook));
+        when(sidecarWriter.writeSidecarMetadataWithResult(activeBook, true)).thenReturn(SidecarMetadataWriter.SidecarWriteResult.succeeded());
+        when(sidecarWriter.writeSidecarMetadataWithResult(missingBook, true)).thenReturn(SidecarMetadataWriter.SidecarWriteResult.missingSource("The source book file does not exist on disk."));
+
+        SidecarService.SidecarBatchResult result = sidecarService.backupLibrarySidecars(10L);
+
+        assertEquals(2, result.attempted());
+        assertEquals(1, result.exported());
+        assertEquals(1, result.pruned());
+        assertEquals(0, result.failed());
+        assertNull(result.firstError());
+        verify(bookDeletionService).deleteRemovedBooks(List.of(51L));
+        verify(auditService).log(
+            AuditAction.SIDECAR_BACKUP_COMPLETED,
+            "Library",
+            10L,
+            "Sidecar backup for library 'Prune Library' (attempted=2, exported=1, pruned=1, failed=0)"
         );
     }
 

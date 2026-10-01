@@ -79,8 +79,17 @@ public class SidecarMetadataWriter {
             if (!physicalDirectorySidecar) {
                 Path bookPath = book.getFullFilePath();
                 if (bookPath == null || !Files.exists(bookPath)) {
-                    log.warn("Cannot write sidecar metadata: book file does not exist");
-                    return SidecarWriteResult.failure("The source book file does not exist on disk.");
+                    log.warn("Cannot write sidecar metadata: book file does not exist for book ID {} at {}",
+                            book.getId(), bookPath);
+                    if (sidecarPath != null && Files.exists(sidecarPath)) {
+                        try {
+                            Files.deleteIfExists(sidecarPath);
+                            log.info("Deleted orphaned sidecar file: {}", sidecarPath);
+                        } catch (IOException e) {
+                            log.warn("Failed to delete orphaned sidecar file: {}", sidecarPath, e);
+                        }
+                    }
+                    return SidecarWriteResult.missingSource("The source book file does not exist on disk.");
                 }
             }
 
@@ -236,13 +245,17 @@ public class SidecarMetadataWriter {
         return settings != null && settings.isEnabled() && settings.isWriteOnScan();
     }
 
-    public record SidecarWriteResult(boolean completed, String errorMessage) {
+    public record SidecarWriteResult(boolean completed, boolean missingSource, String errorMessage) {
         public static SidecarWriteResult succeeded() {
-            return new SidecarWriteResult(true, null);
+            return new SidecarWriteResult(true, false, null);
+        }
+
+        public static SidecarWriteResult missingSource(String errorMessage) {
+            return new SidecarWriteResult(false, true, errorMessage);
         }
 
         public static SidecarWriteResult failure(String errorMessage) {
-            return new SidecarWriteResult(false, errorMessage);
+            return new SidecarWriteResult(false, false, errorMessage);
         }
     }
 }

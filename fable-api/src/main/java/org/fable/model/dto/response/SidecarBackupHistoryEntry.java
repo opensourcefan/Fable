@@ -6,6 +6,7 @@ public record SidecarBackupHistoryEntry(
         String status,
         int attempted,
         int exported,
+        int pruned,
         int failed,
         String firstError,
         String description,

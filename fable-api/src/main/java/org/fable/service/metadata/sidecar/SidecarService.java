@@ -17,12 +17,14 @@ import org.fable.model.enums.SidecarSyncStatus;
 import org.fable.repository.AuditLogRepository;
 import org.fable.repository.BookRepository;
 import org.fable.repository.LibraryRepository;
+import org.fable.service.library.BookDeletionService;
 import org.fable.service.audit.AuditService;
 import org.fable.service.metadata.BookMetadataUpdater;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.regex.Matcher;
@@ -34,7 +36,7 @@ import java.util.regex.Pattern;
 public class SidecarService {
     private static final String LIBRARY_ENTITY_TYPE = "Library";
     private static final int MAX_HISTORY_LIMIT = 10;
-    private static final Pattern BACKUP_COUNTS_PATTERN = Pattern.compile("attempted=(\\d+), exported=(\\d+), failed=(\\d+)\\)");
+    private static final Pattern BACKUP_COUNTS_PATTERN = Pattern.compile("attempted=(\\d+), exported=(\\d+)(?:, pruned=(\\d+))?, failed=(\\d+)\\)");
     private static final Pattern FIRST_ERROR_PATTERN = Pattern.compile("\\. First error: (.*)$");
     private static final List<AuditAction> BACKUP_HISTORY_ACTIONS = List.of(
             AuditAction.SIDECAR_BACKUP_COMPLETED,
@@ -50,6 +52,7 @@ public class SidecarService {
     private final SidecarMetadataMapper sidecarMapper;
     private final BookMetadataUpdater bookMetadataUpdater;
     private final AuditService auditService;
+    private final BookDeletionService bookDeletionService;
 
     public Optional<SidecarMetadata> getSidecarContent(Long bookId) {
         BookEntity book = bookRepository.findByIdWithBookFiles(bookId)
@@ -154,6 +157,7 @@ public class SidecarService {
         List<BookEntity> books = bookRepository.findAllForMetadataFlushByLibraryId(libraryId);
         int exported = 0;
         int failed = 0;
+        List<Long> orphanedBookIds = new ArrayList<>();
         String firstError = null;
 
         for (BookEntity book : books) {
@@ -161,6 +165,10 @@ public class SidecarService {
                 SidecarMetadataWriter.SidecarWriteResult result = sidecarWriter.writeSidecarMetadataWithResult(book, true);
                 if (result.completed()) {
                     exported++;
+                } else if (result.missingSource()) {
+                    orphanedBookIds.add(book.getId());
+                    log.info("Identified orphaned book ID {} with missing file on disk: {}",
+                            book.getId(), book.getFullFilePath());
                 } else {
                     failed++;
                     if (firstError == null) {
@@ -176,10 +184,19 @@ public class SidecarService {
             }
         }
 
-        log.info("Backed up {} sidecar files for library {} (attempted={}, failed={})", exported, library.getName(), books.size(), failed);
+        int pruned = 0;
+        if (!orphanedBookIds.isEmpty()) {
+            log.info("Pruning {} orphaned book record(s) during sidecar sync for library '{}'",
+                    orphanedBookIds.size(), library.getName());
+            bookDeletionService.deleteRemovedBooks(orphanedBookIds);
+            pruned = orphanedBookIds.size();
+        }
+
+        log.info("Backed up {} sidecar files for library {} (attempted={}, exported={}, pruned={}, failed={})",
+                exported, library.getName(), books.size(), exported, pruned, failed);
         auditService.log(resolveBackupAuditAction(exported, failed), "Library", libraryId,
-                buildBackupAuditDescription(library.getName(), books.size(), exported, failed, firstError));
-        return new SidecarBatchResult(books.size(), exported, failed, firstError);
+                buildBackupAuditDescription(library.getName(), books.size(), exported, pruned, failed, firstError));
+        return new SidecarBatchResult(books.size(), exported, pruned, failed, firstError);
     }
 
     private AuditAction resolveBackupAuditAction(int exported, int failed) {
@@ -194,8 +211,8 @@ public class SidecarService {
         return AuditAction.SIDECAR_BACKUP_PARTIAL;
     }
 
-    private String buildBackupAuditDescription(String libraryName, int attempted, int exported, int failed, String firstError) {
-        String description = "Sidecar backup for library '" + libraryName + "' (attempted=" + attempted + ", exported=" + exported + ", failed=" + failed + ")";
+    private String buildBackupAuditDescription(String libraryName, int attempted, int exported, int pruned, int failed, String firstError) {
+        String description = "Sidecar backup for library '" + libraryName + "' (attempted=" + attempted + ", exported=" + exported + (pruned > 0 ? ", pruned=" + pruned : "") + ", failed=" + failed + ")";
         if (firstError == null || firstError.isBlank()) {
             return description;
         }
@@ -252,6 +269,7 @@ public class SidecarService {
                 mapAuditActionToStatus(auditLog.getAction()),
                 counts.attempted(),
                 counts.exported(),
+                counts.pruned(),
                 counts.failed(),
                 parseFirstError(auditLog.getDescription()),
                 auditLog.getDescription(),
@@ -262,19 +280,20 @@ public class SidecarService {
 
     private BackupCounts parseBackupCounts(String description) {
         if (description == null || description.isBlank()) {
-            return new BackupCounts(0, 0, 0);
+            return new BackupCounts(0, 0, 0, 0);
         }
 
         Matcher matcher = BACKUP_COUNTS_PATTERN.matcher(description);
         if (!matcher.find()) {
-            return new BackupCounts(0, 0, 0);
+            return new BackupCounts(0, 0, 0, 0);
         }
 
-        return new BackupCounts(
-                Integer.parseInt(matcher.group(1)),
-                Integer.parseInt(matcher.group(2)),
-                Integer.parseInt(matcher.group(3))
-        );
+        int attempted = Integer.parseInt(matcher.group(1));
+        int exported = Integer.parseInt(matcher.group(2));
+        int pruned = matcher.group(3) != null ? Integer.parseInt(matcher.group(3)) : 0;
+        int failed = Integer.parseInt(matcher.group(4));
+
+        return new BackupCounts(attempted, exported, pruned, failed);
     }
 
     private String parseFirstError(String description) {
@@ -294,9 +313,9 @@ public class SidecarService {
         };
     }
 
-    public record SidecarBatchResult(int attempted, int exported, int failed, String firstError) {
+    public record SidecarBatchResult(int attempted, int exported, int pruned, int failed, String firstError) {
     }
 
-    private record BackupCounts(int attempted, int exported, int failed) {
+    private record BackupCounts(int attempted, int exported, int pruned, int failed) {
     }
 }

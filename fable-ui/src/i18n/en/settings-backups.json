@@ -53,6 +53,7 @@
     "notice": "Automatic sidecar writes stay in Metadata settings. This tab only keeps the manual per-library backup routine.",
     "attempted": "Attempted",
     "exported": "Exported",
+    "pruned": "Pruned",
     "failed": "Failed",
     "user": "Triggered by",
     "historyTitle": "Recent runs",
