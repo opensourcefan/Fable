@@ -36,6 +36,9 @@ class LibraryHealthServiceTest {
     @Mock
     private AppSettingService appSettingService;
 
+    @Mock
+    private org.fable.service.FailureNotificationService failureNotificationService;
+
     private LibraryHealthService libraryHealthService;
 
     @TempDir
@@ -47,7 +50,7 @@ class LibraryHealthServiceTest {
         settings.setLibraryHealthCheckIntervalSeconds(0);
         when(appSettingService.getAppSettings()).thenReturn(settings);
         when(libraryPathRepository.findAllWithLibrary()).thenReturn(List.of());
-        libraryHealthService = new LibraryHealthService(libraryPathRepository, messagingTemplate, appSettingService);
+        libraryHealthService = new LibraryHealthService(libraryPathRepository, messagingTemplate, appSettingService, failureNotificationService);
         libraryHealthService.init();
     }
 
@@ -155,6 +158,20 @@ class LibraryHealthServiceTest {
         libraryHealthService.checkAndBroadcast();
 
         assertThat(libraryHealthService.getCurrentHealth()).isEmpty();
+    }
+
+    @Test
+    void shouldReportDismissibleFailureNotificationOncePerInaccessiblePathStreak() {
+        LibraryPathEntity badPath = createLibraryPath(1L, "/nonexistent/comics/path");
+        badPath.getLibrary().setName("Comics");
+
+        when(libraryPathRepository.findAllWithLibrary()).thenReturn(List.of(badPath));
+
+        libraryHealthService.checkAndBroadcast();
+        libraryHealthService.checkAndBroadcast();
+
+        assertThat(libraryHealthService.getInaccessiblePaths()).containsEntry(1L, List.of("/nonexistent/comics/path"));
+        verify(failureNotificationService, times(1)).reportError(contains("/nonexistent/comics/path"));
     }
 
     private LibraryPathEntity createLibraryPath(Long libraryId, String path) {

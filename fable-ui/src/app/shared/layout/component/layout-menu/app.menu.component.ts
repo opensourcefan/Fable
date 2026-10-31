@@ -808,6 +808,11 @@ export class AppMenuComponent implements OnInit, OnDestroy {
               prefetchLibraryId: library.id ?? undefined,
               bookCount$: this.createRefreshableCount$(() => this.libraryService.getBookCount(library.id ?? 0)),
               unhealthy$: this.libraryHealthService.isUnhealthy$(library.id ?? 0),
+              unhealthyTooltip$: this.libraryHealthService.getInaccessibleTooltip$(
+                library.id ?? 0,
+                (library.paths ?? []).filter(p => p.accessible === false).map(p => p.path),
+                this.t.translate('common.libraryPathInaccessible')
+              ),
             })),
           },
         ];
@@ -840,6 +845,11 @@ export class AppMenuComponent implements OnInit, OnDestroy {
               prefetchLibraryId: library.id ?? undefined,
               bookCount$: this.createRefreshableCount$(() => this.libraryService.getBookCount(library.id ?? 0)),
               unhealthy$: this.libraryHealthService.isUnhealthy$(library.id ?? 0),
+              unhealthyTooltip$: this.libraryHealthService.getInaccessibleTooltip$(
+                library.id ?? 0,
+                (library.paths ?? []).filter(p => p.accessible === false).map(p => p.path),
+                this.t.translate('common.libraryPathInaccessible')
+              ),
             })),
           },
         ];

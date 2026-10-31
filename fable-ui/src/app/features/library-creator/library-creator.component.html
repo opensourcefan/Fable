@@ -129,6 +129,17 @@
         </div>
 
         <div class="folders-zone">
+          @if (getInaccessibleActiveFolders().length > 0) {
+            <div class="directory-inaccessible-alert" role="alert">
+              <i class="pi pi-exclamation-triangle"></i>
+              <div class="alert-content">
+                <strong>{{ 'common.libraryPathInaccessible' | transloco }}</strong>
+                <span>
+                  {{ getInaccessibleActiveFolders().join(', ') }}
+                </span>
+              </div>
+            </div>
+          }
           @if (isDirectoryManagementMode()) {
             <div class="directory-scan-note">
               <i class="pi pi-info-circle"></i>
@@ -149,14 +160,21 @@
           @if (folders.length > 0) {
             <div class="folders-list">
               @for (folder of folders; track folder; let i = $index) {
-                <div class="folder-item" [class.marked-for-deletion]="isFolderMarkedForDeletion(folder)">
+                <div class="folder-item"
+                     [class.marked-for-deletion]="isFolderMarkedForDeletion(folder)"
+                     [class.inaccessible-folder]="isFolderInaccessible(folder) && !isFolderMarkedForDeletion(folder)">
                   <div class="folder-info">
-                    <i class="pi pi-folder"></i>
+                    <i class="pi" [class.pi-exclamation-triangle]="isFolderInaccessible(folder)" [class.pi-folder]="!isFolderInaccessible(folder)"></i>
                     <div class="folder-name-row">
                       <span class="folder-path" [pTooltip]="folder" tooltipPosition="top">
-                        {{ getDisplayPath(folder) }}
+                        {{ isFolderInaccessible(folder) ? folder : getDisplayPath(folder) }}
                       </span>
-                      @if (isDirectoryManagementMode() && isImportedDirectory(folder)) {
+                      @if (isFolderInaccessible(folder)) {
+                        <span class="folder-inaccessible-chip" [pTooltip]="'common.libraryPathInaccessible' | transloco" tooltipPosition="top">
+                          <i class="pi pi-exclamation-triangle"></i>
+                          <span class="chip-text">{{ 'common.libraryPathInaccessible' | transloco }}</span>
+                        </span>
+                      } @else if (isDirectoryManagementMode() && isImportedDirectory(folder)) {
                         <span class="folder-imported-chip">
                           <i class="pi pi-check-circle"></i>
                           <span class="chip-text">{{ t('importedDirectoryBadge') }}</span>

@@ -34,6 +34,7 @@ export interface AppMenuItem extends MenuItem {
   menu?: AppMenuItem[];
   bookCount$?: Observable<number>;
   unhealthy$?: Observable<boolean>;
+  unhealthyTooltip$?: Observable<string>;
   items?: AppMenuItem[];
   prefetchLibraryId?: number;
   showBookCount?: boolean;

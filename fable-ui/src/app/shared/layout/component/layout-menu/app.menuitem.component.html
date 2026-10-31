@@ -148,7 +148,7 @@
           @if (item.unhealthy$ | async) {
             <span
               class="sidebar-row-status-slot sidebar-row-status-slot-visible library-health-icon"
-              [pTooltip]="'common.libraryPathInaccessible' | transloco"
+              [pTooltip]="(item.unhealthyTooltip$ | async) || ('common.libraryPathInaccessible' | transloco)"
               tooltipPosition="right"
               aria-hidden="true"
             >

@@ -4,6 +4,7 @@ import {MessageService} from 'primeng/api';
 import {FailureNotificationService} from '../../shared/service/failure-notification.service';
 import {Router} from '@angular/router';
 import {LibraryService} from '../book/service/library.service';
+import {LibraryHealthService} from '../book/service/library-health.service';
 import {FormsModule} from '@angular/forms';
 import {InputText} from 'primeng/inputtext';
 import {Library, MetadataSource, OrganizationMode, DirectoryTagDepth} from '../book/model/library.model';
@@ -37,6 +38,7 @@ export class LibraryCreatorComponent implements OnInit {
   folders: string[] = [];
   originalFolders: string[] = [];
   foldersToDelete = new Set<string>();
+  inaccessibleFolders = new Set<string>();
   selectedIcon: IconSelection | null = null;
 
   mode: LibraryCreatorMode = 'create';
@@ -73,6 +75,7 @@ export class LibraryCreatorComponent implements OnInit {
   private dynamicDialogRef = inject(DynamicDialogRef);
   private dynamicDialogConfig = inject(DynamicDialogConfig);
   private libraryService = inject(LibraryService);
+  private libraryHealthService = inject(LibraryHealthService);
   private messageService = inject(MessageService);
   private failureNotifications = inject(FailureNotificationService);
   private router = inject(Router);
@@ -163,6 +166,13 @@ export class LibraryCreatorComponent implements OnInit {
 
         this.folders = paths.map(path => path.path).sort((a, b) => a.localeCompare(b));
         this.originalFolders = [...this.folders];
+        const initialInaccessible = paths.filter(p => p.accessible === false).map(p => p.path);
+        this.inaccessibleFolders = new Set(initialInaccessible);
+        if (this.library.id != null) {
+          this.libraryHealthService.getInaccessiblePaths$(this.library.id, initialInaccessible).pipe(take(1)).subscribe(pathsList => {
+            this.inaccessibleFolders = new Set([...initialInaccessible, ...pathsList]);
+          });
+        }
       }
     }
   }
@@ -268,6 +278,14 @@ export class LibraryCreatorComponent implements OnInit {
 
   isFolderMarkedForDeletion(folder: string): boolean {
     return this.foldersToDelete.has(folder);
+  }
+
+  isFolderInaccessible(folder: string): boolean {
+    return this.inaccessibleFolders.has(folder);
+  }
+
+  getInaccessibleActiveFolders(): string[] {
+    return this.folders.filter(f => this.isFolderInaccessible(f) && !this.isFolderMarkedForDeletion(f));
   }
 
   rescanDirectory(path: string): void {

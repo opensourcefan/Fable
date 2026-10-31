@@ -71,6 +71,8 @@ class LibraryServiceIconTest {
     @Mock
     private FailureNotificationService failureNotificationService;
     @Mock
+    private LibraryHealthService libraryHealthService;
+    @Mock
     private DirectoryTagTaskStarter directoryTagTaskStarter;
 
     @InjectMocks

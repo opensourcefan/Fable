@@ -15,4 +15,5 @@ public class LibraryPath {
     private Long id;
     private Long libraryId;
     private String path;
+    private Boolean accessible;
 }

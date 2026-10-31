@@ -79,15 +79,17 @@ public class LibraryService {
     private final AuditService auditService;
     private final PathService pathService;
     private final FailureNotificationService failureNotificationService;
+    private final LibraryHealthService libraryHealthService;
 
     @Transactional
     @EventListener(ApplicationReadyEvent.class)
     public void initializeMonitoring() {
-        List<Library> libraries = libraryRepository.findAll().stream().map(libraryMapper::toLibrary).collect(Collectors.toList());
+        List<Library> libraries = libraryRepository.findAll().stream().map(this::toLibraryWithPathHealth).collect(Collectors.toList());
         libraryWatchService.registerLibraries(libraries);
         log.info("Monitoring initialized with {} libraries", libraries.size());
     }
 
+    @Transactional
     public Library updateLibrary(CreateLibraryRequest request, Long libraryId) {
         LibraryEntity library = libraryRepository.findById(libraryId)
                 .orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(libraryId));
@@ -149,15 +151,17 @@ public class LibraryService {
         }
 
         LibraryEntity savedLibrary = libraryRepository.save(library);
+        Library mappedLibrary = toLibraryWithPathHealth(savedLibrary);
 
         if (request.isWatch()) {
-            libraryWatchService.registerLibraries(List.of(libraryMapper.toLibrary(savedLibrary)));
+            libraryWatchService.registerLibraries(List.of(mappedLibrary));
         } else {
             libraryWatchService.unregisterLibrary(libraryId);
         }
 
+        refreshLibraryHealthSafely();
         auditService.log(AuditAction.LIBRARY_UPDATED, "Library", libraryId, "Updated library: " + library.getName());
-        return libraryMapper.toLibrary(savedLibrary);
+        return mappedLibrary;
     }
 
     public Library createLibrary(CreateLibraryRequest request) {
@@ -203,6 +207,8 @@ public class LibraryService {
             }
         }
 
+        refreshLibraryHealthSafely();
+
         SecurityContextVirtualThread.runWithSecurityContext(() -> {
             if (!scanningLibraries.add(libraryId)) {
                 log.warn("Library {} is already being scanned, skipping duplicate process request", libraryId);
@@ -217,12 +223,13 @@ public class LibraryService {
                 failureNotificationService.reportError("Failed to process library: " + e.getMessage());
             } finally {
                 scanningLibraries.remove(libraryId);
+                refreshLibraryHealthSafely();
             }
             log.info("Parsing task completed!");
         });
 
         auditService.log(AuditAction.LIBRARY_CREATED, "Library", libraryEntity.getId(), "Created library: " + libraryEntity.getName());
-        return libraryMapper.toLibrary(libraryEntity);
+        return toLibraryWithPathHealth(libraryEntity);
     }
 
     public void rescanLibrary(long libraryId) {
@@ -246,6 +253,7 @@ public class LibraryService {
                 failureNotificationService.reportError("Failed to reconcile library '" + lib.getName() + "': " + e.getMessage());
             } finally {
                 scanningLibraries.remove(libraryId);
+                refreshLibraryHealthSafely();
             }
             log.info("Parsing task completed!");
         });
@@ -269,6 +277,7 @@ public class LibraryService {
                 failureNotificationService.reportError("Failed to scan library '" + lib.getName() + "' for new files: " + e.getMessage());
             } finally {
                 scanningLibraries.remove(libraryId);
+                refreshLibraryHealthSafely();
             }
             log.info("New-file scan task completed!");
         });
@@ -293,6 +302,7 @@ public class LibraryService {
                 failureNotificationService.reportError("Failed to scan directories in library '" + lib.getName() + "': " + e.getMessage());
             } finally {
                 scanningLibraries.remove(libraryId);
+                refreshLibraryHealthSafely();
             }
             log.info("Directory-scoped new-file scan task completed!");
         });
@@ -301,13 +311,13 @@ public class LibraryService {
     @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public Library getLibrary(long libraryId) {
         LibraryEntity libraryEntity = libraryRepository.findById(libraryId).orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(libraryId));
-        return libraryMapper.toLibrary(libraryEntity);
+        return toLibraryWithPathHealth(libraryEntity);
     }
 
     @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public List<Library> getAllLibraries() {
         List<LibraryEntity> libraries = libraryRepository.findAll();
-        return libraries.stream().map(libraryMapper::toLibrary).toList();
+        return libraries.stream().map(this::toLibraryWithPathHealth).toList();
     }
 
     @org.springframework.transaction.annotation.Transactional(readOnly = true)
@@ -339,13 +349,36 @@ public class LibraryService {
                 .collect(Collectors.toMap(FableUserEntity::getId, FableUserEntity::getUsername, (a, b) -> a));
 
         return libraries.stream().map(entity -> {
-            Library library = libraryMapper.toLibrary(entity);
+            Library library = toLibraryWithPathHealth(entity);
             if (entity.getOwnerUserId() != null) {
                 library.setOwnerUsername(ownerUsernames.get(entity.getOwnerUserId()));
             }
             library.setShowInAdminCatalog(entity.isShowInAdminCatalog());
             return library;
         }).toList();
+    }
+
+    private Library toLibraryWithPathHealth(LibraryEntity entity) {
+        Library library = libraryMapper.toLibrary(entity);
+        if (library != null && library.getPaths() != null) {
+            for (LibraryPath lp : library.getPaths()) {
+                if (lp != null && lp.getPath() != null) {
+                    lp.setAccessible(LibraryHealthService.isPathAccessibleOnDisk(lp.getPath()));
+                }
+            }
+        }
+        return library;
+    }
+
+    private void refreshLibraryHealthSafely() {
+        if (libraryHealthService == null) {
+            return;
+        }
+        try {
+            libraryHealthService.refreshAndBroadcast();
+        } catch (Exception e) {
+            log.debug("Failed to refresh library health: {}", e.getMessage());
+        }
     }
 
     @Transactional
@@ -357,6 +390,7 @@ public class LibraryService {
         fileService.deleteBookCovers(bookIds);
         String libraryName = library.getName();
         libraryRepository.deleteById(id);
+        refreshLibraryHealthSafely();
         auditService.log(AuditAction.LIBRARY_DELETED, "Library", id, "Deleted library: " + libraryName);
         log.info("Library deleted successfully: {}", id);
     }

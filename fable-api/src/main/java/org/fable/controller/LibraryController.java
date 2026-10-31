@@ -44,6 +44,13 @@ public class LibraryController {
         return ResponseEntity.ok(libraryHealthService.getCurrentHealth());
     }
 
+    @Operation(summary = "Get inaccessible library paths", description = "Return any inaccessible directory paths per library.")
+    @ApiResponse(responseCode = "200", description = "Inaccessible library paths returned successfully")
+    @GetMapping("/health/inaccessible-paths")
+    public ResponseEntity<Map<Long, List<String>>> getInaccessibleLibraryPaths() {
+        return ResponseEntity.ok(libraryHealthService.getInaccessiblePaths());
+    }
+
     @Operation(summary = "Get a library by ID", description = "Retrieve details of a specific library by its ID.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Library details returned successfully"),
