@@ -89,7 +89,7 @@ describe('AppMenuComponent reorder mode', () => {
       providers: [
         {provide: Router, useValue: routerMock},
         {provide: LibraryService, useValue: libraryServiceMock},
-        {provide: LibraryHealthService, useValue: {isUnhealthy$: vi.fn(() => of(false))}},
+        {provide: LibraryHealthService, useValue: {isUnhealthy$: vi.fn(() => of(false)), getInaccessibleTooltip$: vi.fn(() => of(''))}},
         {provide: ShelfService, useValue: shelfServiceMock},
         {provide: BookService, useValue: {getBooksCount}},
         {provide: VersionService, useValue: versionServiceMock},

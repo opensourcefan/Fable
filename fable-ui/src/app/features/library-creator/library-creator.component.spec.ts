@@ -279,4 +279,28 @@ describe('LibraryCreatorComponent', () => {
     expect(component.getDisplayPath('/home/michael/fable/books/poetry')).toBe('.../books/poetry');
     expect(component.getDisplayPath('/home/michael/fable/books/fiction/sci-fi')).toBe('.../fiction/sci-fi');
   });
+
+  it('tracks inaccessible folders on load and excludes folders marked for deletion', () => {
+    const testLibrary = {
+      id: 5,
+      name: 'Library',
+      watch: false,
+      paths: [
+        {path: '/books/accessible', accessible: true},
+        {path: '/books/missing', accessible: false}
+      ],
+      allowedFormats: ['EPUB'],
+      organizationMode: 'BOOK_PER_FILE'
+    };
+    libraryServiceMock.findLibraryById.mockReturnValue(testLibrary);
+    component['dynamicDialogConfig'] = { data: { mode: 'edit-directories', libraryId: 5 } } as unknown as DynamicDialogConfig;
+    component.ngOnInit();
+
+    expect(component.isFolderInaccessible('/books/accessible')).toBe(false);
+    expect(component.isFolderInaccessible('/books/missing')).toBe(true);
+    expect(component.getInaccessibleActiveFolders()).toEqual(['/books/missing']);
+
+    component.removeFolder(1, '/books/missing');
+    expect(component.getInaccessibleActiveFolders()).toEqual([]);
+  });
 });

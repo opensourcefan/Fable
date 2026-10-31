@@ -88,4 +88,23 @@ describe('LibraryHealthService', () => {
 
     expect(results.length).toBe(1);
   });
+
+  it('should emit inaccessible paths and formatted tooltip when library is unhealthy', () => {
+    httpGetSpy.mockReturnValue(of({1: false}));
+    service.initialize();
+
+    const tooltips: string[] = [];
+    service.getInaccessibleTooltip$(1, ['/comics/fallback'], 'Library path is inaccessible').subscribe(v => tooltips.push(v));
+
+    expect(tooltips[tooltips.length - 1]).toBe('Library path is inaccessible: /comics/fallback');
+
+    wsSubject.next({
+      body: JSON.stringify({
+        libraryHealth: {1: false},
+        inaccessiblePaths: {1: ['/comics/missing-a', '/comics/missing-b']}
+      })
+    } as IMessage);
+
+    expect(tooltips[tooltips.length - 1]).toBe('Library path is inaccessible: /comics/missing-a, /comics/missing-b');
+  });
 });
