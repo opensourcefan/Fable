@@ -24,6 +24,7 @@ import org.fable.repository.BookRepository;
 import org.fable.repository.LibraryPathRepository;
 import org.fable.repository.LibraryRepository;
 import org.fable.repository.UserRepository;
+import org.fable.service.FailureNotificationService;
 import org.fable.service.NotificationService;
 import org.fable.service.audit.AuditService;
 import org.fable.service.file.PathService;
@@ -77,6 +78,7 @@ public class LibraryService {
     private final UserRepository userRepository;
     private final AuditService auditService;
     private final PathService pathService;
+    private final FailureNotificationService failureNotificationService;
 
     @Transactional
     @EventListener(ApplicationReadyEvent.class)
@@ -210,6 +212,9 @@ public class LibraryService {
                 libraryProcessingService.processLibrary(libraryId);
             } catch (InvalidDataAccessApiUsageException e) {
                 log.debug("InvalidDataAccessApiUsageException - Library id: {}", libraryId);
+            } catch (Exception e) {
+                log.error("Error while processing library {}", libraryId, e);
+                failureNotificationService.reportError("Failed to process library: " + e.getMessage());
             } finally {
                 scanningLibraries.remove(libraryId);
             }
@@ -236,8 +241,9 @@ public class LibraryService {
                 libraryProcessingService.rescanLibrary(context);
             } catch (InvalidDataAccessApiUsageException e) {
                 log.debug("InvalidDataAccessApiUsageException - Library id: {}", libraryId);
-            } catch (IOException e) {
-                log.error("Error while parsing library books", e);
+            } catch (Exception e) {
+                log.error("Error while parsing library books for library {}", libraryId, e);
+                failureNotificationService.reportError("Failed to reconcile library '" + lib.getName() + "': " + e.getMessage());
             } finally {
                 scanningLibraries.remove(libraryId);
             }
@@ -258,8 +264,9 @@ public class LibraryService {
                 libraryProcessingService.scanLibraryForNewFiles(libraryId);
             } catch (InvalidDataAccessApiUsageException e) {
                 log.debug("InvalidDataAccessApiUsageException - Library id: {}", libraryId);
-            } catch (IOException e) {
+            } catch (Exception e) {
                 log.error("Error while scanning library {} for new files", libraryId, e);
+                failureNotificationService.reportError("Failed to scan library '" + lib.getName() + "' for new files: " + e.getMessage());
             } finally {
                 scanningLibraries.remove(libraryId);
             }
@@ -281,8 +288,9 @@ public class LibraryService {
                 libraryProcessingService.scanLibraryDirectoriesForNewFiles(libraryId, targetPaths);
             } catch (InvalidDataAccessApiUsageException e) {
                 log.debug("InvalidDataAccessApiUsageException - Library id: {}", libraryId);
-            } catch (IOException e) {
+            } catch (Exception e) {
                 log.error("Error while scanning library {} directories for new files", libraryId, e);
+                failureNotificationService.reportError("Failed to scan directories in library '" + lib.getName() + "': " + e.getMessage());
             } finally {
                 scanningLibraries.remove(libraryId);
             }

@@ -81,7 +81,11 @@ public class BookCreatorService {
             primaryFile.setInitialHash(newHash);
             primaryFile.setFileSizeKb(fileSizeKb);
             primaryFile.setFolderBased(libraryFile.isFolderBased());
-            existingBook.setDeleted(false);
+            if (!Boolean.TRUE.equals(existingBook.getRemovedFromLibrary())) {
+                existingBook.setDeleted(false);
+                existingBook.setDeletedAt(null);
+                existingBook.setAddedOn(Instant.now());
+            }
             return existingBook;
         }
 
@@ -156,11 +160,21 @@ public class BookCreatorService {
         if (bookEntity.getMetadata().getAuthors() == null) {
             bookEntity.getMetadata().setAuthors(new ArrayList<>());
         }
+        List<AuthorEntity> existingAuthors = bookEntity.getMetadata().getAuthors();
         authors.stream()
+                .filter(Objects::nonNull)
                 .map(authorName -> truncate(authorName, 255))
+                .distinct()
                 .map(authorName -> authorRepository.findByName(authorName)
                         .orElseGet(() -> authorRepository.save(AuthorEntity.builder().name(authorName).build())))
-                .forEach(authorEntity -> bookEntity.getMetadata().getAuthors().add(authorEntity));
+                .forEach(authorEntity -> {
+                    boolean alreadyPresent = existingAuthors.stream()
+                            .anyMatch(existing -> existing.equals(authorEntity)
+                                    || (existing.getName() != null && existing.getName().equals(authorEntity.getName())));
+                    if (!alreadyPresent) {
+                        existingAuthors.add(authorEntity);
+                    }
+                });
         bookEntity.getMetadata().updateSearchText(); // Manually trigger search text update since collection modification doesn't trigger @PreUpdate
     }
 
@@ -281,12 +295,18 @@ public class BookCreatorService {
             ComicCreatorEntity creator = comicCreatorRepository.findByName(truncatedName)
                     .orElseGet(() -> comicCreatorRepository.save(ComicCreatorEntity.builder().name(truncatedName).build()));
 
-            ComicCreatorMappingEntity mapping = ComicCreatorMappingEntity.builder()
-                    .comicMetadata(comic)
-                    .creator(creator)
-                    .role(role)
-                    .build();
-            comic.getCreatorMappings().add(mapping);
+            boolean alreadyExists = comic.getCreatorMappings().stream()
+                    .anyMatch(m -> m.getRole() == role && m.getCreator() != null
+                            && (Objects.equals(m.getCreator().getId(), creator.getId())
+                                || Objects.equals(m.getCreator().getName(), creator.getName())));
+            if (!alreadyExists) {
+                ComicCreatorMappingEntity mapping = ComicCreatorMappingEntity.builder()
+                        .comicMetadata(comic)
+                        .creator(creator)
+                        .role(role)
+                        .build();
+                comic.getCreatorMappings().add(mapping);
+            }
         }
     }
 }

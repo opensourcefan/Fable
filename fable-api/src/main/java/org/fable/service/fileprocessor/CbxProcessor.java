@@ -352,9 +352,12 @@ public class CbxProcessor extends AbstractFileProcessor {
             return;
         }
 
-        ComicMetadataEntity comic = new ComicMetadataEntity();
-        comic.setBookId(bookId);
-        comic.setBookMetadata(bookEntity.getMetadata());
+        ComicMetadataEntity comic = bookEntity.getMetadata().getComicMetadata();
+        if (comic == null) {
+            comic = new ComicMetadataEntity();
+            comic.setBookId(bookId);
+            comic.setBookMetadata(bookEntity.getMetadata());
+        }
         comic.setIssueNumber(comicDto.getIssueNumber());
         comic.setVolumeName(comicDto.getVolumeName());
         comic.setVolumeNumber(comicDto.getVolumeNumber());

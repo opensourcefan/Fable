@@ -65,11 +65,18 @@ public abstract class AbstractFileProcessor implements BookFileProcessor {
                 ? FileFingerprint.generateFolderHash(path)
                 : FileFingerprint.generateHash(path);
         Book book = createAndMapBook(libraryFile, hash);
+        if (book == null) {
+            return null;
+        }
         return new FileProcessResult(book, FileProcessStatus.NEW);
     }
 
     private Book createAndMapBook(LibraryFile libraryFile, String hash) {
         BookEntity entity = processNewFile(libraryFile);
+        if (Boolean.TRUE.equals(entity.getRemovedFromLibrary())) {
+            log.info("Skipping permanently removed book id={} for file '{}'", entity.getId(), libraryFile.getFileName());
+            return null;
+        }
         entity.getPrimaryBookFile().setCurrentHash(hash);
         applyDirectoryTag(entity, libraryFile);
         applyTitleFallback(entity, libraryFile);

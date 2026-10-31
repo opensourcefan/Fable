@@ -63,7 +63,7 @@ public class LibraryProcessingService {
     public void processLibrary(long libraryId) {
         LibraryEntity libraryEntity = libraryRepository.findById(libraryId).orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(libraryId));
         try {
-            physicalBookService.importPhysicalBooksFromSidecars(libraryEntity, libraryEntity.getLibraryPaths());
+            importPhysicalBookSidecarsSafely(libraryEntity, libraryEntity.getLibraryPaths());
             List<LibraryFile> libraryFiles = libraryFileHelper.getLibraryFiles(libraryEntity);
             int importedCount = importLibraryFiles(libraryEntity, libraryFiles);
             String dirNames = getDirectoryNames(libraryEntity.getLibraryPaths());
@@ -79,7 +79,7 @@ public class LibraryProcessingService {
     public void processLibraryPaths(long libraryId, Set<String> targetPaths) {
         LibraryEntity libraryEntity = libraryRepository.findById(libraryId).orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(libraryId));
         List<LibraryPathEntity> pathEntities = libraryEntity.getLibraryPaths().stream()
-                .filter(pathEntity -> targetPaths.contains(pathEntity.getPath()))
+                .filter(pathEntity -> matchesTargetPaths(pathEntity, targetPaths))
                 .toList();
 
         if (pathEntities.isEmpty()) {
@@ -87,7 +87,7 @@ public class LibraryProcessingService {
             return;
         }
         try {
-            physicalBookService.importPhysicalBooksFromSidecars(libraryEntity, pathEntities);
+            importPhysicalBookSidecarsSafely(libraryEntity, pathEntities);
             List<LibraryFile> libraryFiles = libraryFileHelper.getLibraryFiles(libraryEntity, pathEntities);
             int importedCount = importLibraryFiles(libraryEntity, libraryFiles);
             String dirNames = getDirectoryNames(pathEntities);
@@ -105,19 +105,19 @@ public class LibraryProcessingService {
                 .orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(libraryId));
 
         List<LibraryPathEntity> pathEntities = libraryEntity.getLibraryPaths().stream()
-                .filter(pathEntity -> targetPaths.contains(pathEntity.getPath()))
+                .filter(pathEntity -> matchesTargetPaths(pathEntity, targetPaths))
                 .toList();
 
         if (pathEntities.isEmpty()) {
             log.info("No matching library paths found for explicit scan in library {}", libraryId);
             return;
         }
-        validateLibraryPathsAccessible(pathEntities);
-        physicalBookService.importPhysicalBooksFromSidecars(libraryEntity, pathEntities);
+        List<LibraryPathEntity> accessiblePaths = filterAccessibleLibraryPaths(pathEntities, libraryEntity.getName());
+        importPhysicalBookSidecarsSafely(libraryEntity, accessiblePaths);
 
-        List<LibraryFile> libraryFiles = libraryFileHelper.getLibraryFiles(libraryEntity, pathEntities);
+        List<LibraryFile> libraryFiles = libraryFileHelper.getLibraryFiles(libraryEntity, accessiblePaths);
         int importedCount = importLibraryFiles(libraryEntity, libraryFiles);
-        String dirNames = getDirectoryNames(pathEntities);
+        String dirNames = getDirectoryNames(accessiblePaths);
         log.info("{} assets imported from {} to {}", importedCount, dirNames, libraryEntity.getName());
     }
 
@@ -125,12 +125,15 @@ public class LibraryProcessingService {
     public void scanLibraryForNewFiles(long libraryId) throws IOException {
         LibraryEntity libraryEntity = libraryRepository.findById(libraryId)
                 .orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(libraryId));
-        validateLibraryPathsAccessible(libraryEntity.getLibraryPaths());
-        physicalBookService.importPhysicalBooksFromSidecars(libraryEntity, libraryEntity.getLibraryPaths());
+        List<LibraryPathEntity> configuredPaths = libraryEntity.getLibraryPaths();
+        List<LibraryPathEntity> accessiblePaths = filterAccessibleLibraryPaths(configuredPaths, libraryEntity.getName());
+        importPhysicalBookSidecarsSafely(libraryEntity, accessiblePaths);
 
-        List<LibraryFile> libraryFiles = libraryFileHelper.getLibraryFiles(libraryEntity);
+        List<LibraryFile> libraryFiles = (configuredPaths != null && accessiblePaths.size() < configuredPaths.size())
+                ? libraryFileHelper.getLibraryFiles(libraryEntity, accessiblePaths)
+                : libraryFileHelper.getLibraryFiles(libraryEntity);
         int importedCount = importLibraryFiles(libraryEntity, libraryFiles);
-        String dirNames = getDirectoryNames(libraryEntity.getLibraryPaths());
+        String dirNames = getDirectoryNames(accessiblePaths);
         log.info("{} assets imported from {} to {}", importedCount, dirNames, libraryEntity.getName());
     }
 
@@ -139,7 +142,7 @@ public class LibraryProcessingService {
         LibraryEntity libraryEntity = libraryRepository.findById(context.getLibraryId()).orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(context.getLibraryId()));
 
         validateLibraryPathsAccessible(libraryEntity.getLibraryPaths());
-        physicalBookService.importPhysicalBooksFromSidecars(libraryEntity, libraryEntity.getLibraryPaths());
+        importPhysicalBookSidecarsSafely(libraryEntity, libraryEntity.getLibraryPaths());
 
         List<LibraryFile> allLibraryFiles = libraryFileHelper.getAllLibraryFiles(libraryEntity);
         List<LibraryFile> filteredFiles = libraryFileHelper.filterByAllowedFormats(
@@ -254,6 +257,66 @@ public class LibraryProcessingService {
                 throw ApiError.LIBRARY_PATH_NOT_ACCESSIBLE.createException(path.toString());
             }
         }
+    }
+
+    private List<LibraryPathEntity> filterAccessibleLibraryPaths(List<LibraryPathEntity> pathEntities, String libraryName) {
+        if (pathEntities == null || pathEntities.isEmpty()) {
+            return List.of();
+        }
+        List<LibraryPathEntity> accessiblePaths = pathEntities.stream()
+                .filter(pathEntity -> {
+                    if (pathEntity == null || pathEntity.getPath() == null) {
+                        return false;
+                    }
+                    Path path = Path.of(pathEntity.getPath());
+                    if (!Files.exists(path) || !Files.isDirectory(path) || !Files.isReadable(path)) {
+                        log.warn("Library path not accessible in library '{}', skipping: {}", libraryName, path);
+                        failureNotificationService.reportError(
+                                "Skipping inaccessible path in library '" + libraryName + "': " + path);
+                        return false;
+                    }
+                    return true;
+                })
+                .toList();
+
+        if (accessiblePaths.isEmpty()) {
+            String paths = pathEntities.stream()
+                    .filter(Objects::nonNull)
+                    .map(LibraryPathEntity::getPath)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.joining(", "));
+            log.error("No library paths are accessible for library '{}': {}", libraryName, paths);
+            throw ApiError.LIBRARY_PATH_NOT_ACCESSIBLE.createException(paths);
+        }
+        return accessiblePaths;
+    }
+
+    private void importPhysicalBookSidecarsSafely(LibraryEntity libraryEntity, List<LibraryPathEntity> pathEntities) {
+        try {
+            physicalBookService.importPhysicalBooksFromSidecars(libraryEntity, pathEntities);
+        } catch (Exception e) {
+            log.warn("Failed to import physical book sidecars for library '{}': {}", libraryEntity.getName(), e.getMessage(), e);
+        }
+    }
+
+    private boolean matchesTargetPaths(LibraryPathEntity pathEntity, Set<String> targetPaths) {
+        if (pathEntity == null || pathEntity.getPath() == null || targetPaths == null || targetPaths.isEmpty()) {
+            return false;
+        }
+        if (targetPaths.contains(pathEntity.getPath())) {
+            return true;
+        }
+        try {
+            Path entityPath = Path.of(pathEntity.getPath()).normalize();
+            for (String target : targetPaths) {
+                if (target != null && Path.of(target).normalize().equals(entityPath)) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Failed to normalize path during directory matching: {}", e.getMessage());
+        }
+        return false;
     }
 
     protected static List<Long> detectDeletedBookIds(List<LibraryFile> libraryFiles, LibraryEntity libraryEntity) {

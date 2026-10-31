@@ -39,8 +39,17 @@ public class LibraryFileHelper {
 
     public List<LibraryFile> getAllLibraryFiles(LibraryEntity libraryEntity, List<LibraryPathEntity> pathEntities) throws IOException {
         List<LibraryFile> allFiles = new ArrayList<>();
+        if (pathEntities == null) {
+            return allFiles;
+        }
         for (LibraryPathEntity pathEntity : pathEntities) {
-            allFiles.addAll(findLibraryFiles(pathEntity, libraryEntity));
+            try {
+                allFiles.addAll(findLibraryFiles(pathEntity, libraryEntity));
+            } catch (Exception e) {
+                log.error("Failed to scan library path [{}] for library '{}': {}",
+                        pathEntity != null ? pathEntity.getPath() : "null",
+                        libraryEntity.getName(), e.getMessage(), e);
+            }
         }
         return allFiles;
     }
@@ -66,8 +75,17 @@ public class LibraryFileHelper {
 
     public List<LibraryFile> getAllLibraryFilesFlat(LibraryEntity libraryEntity, List<LibraryPathEntity> pathEntities) throws IOException {
         List<LibraryFile> allFiles = new ArrayList<>();
+        if (pathEntities == null) {
+            return allFiles;
+        }
         for (LibraryPathEntity pathEntity : pathEntities) {
-            allFiles.addAll(findLibraryFilesFlat(pathEntity, libraryEntity));
+            try {
+                allFiles.addAll(findLibraryFilesFlat(pathEntity, libraryEntity));
+            } catch (Exception e) {
+                log.error("Failed to scan library path [{}] for library '{}': {}",
+                        pathEntity != null ? pathEntity.getPath() : "null",
+                        libraryEntity.getName(), e.getMessage(), e);
+            }
         }
         return allFiles;
     }
@@ -111,6 +129,15 @@ public class LibraryFileHelper {
             @NonNull
             public FileVisitResult visitFileFailed(@NonNull Path file, IOException e) {
                 log.error("Failed read path [{}]: {}", file, e.getMessage(), e);
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            @NonNull
+            public FileVisitResult postVisitDirectory(@NonNull Path dir, IOException exc) {
+                if (exc != null) {
+                    log.warn("Error after visiting directory [{}]: {}", dir, exc.getMessage());
+                }
                 return FileVisitResult.CONTINUE;
             }
 
@@ -220,6 +247,9 @@ public class LibraryFileHelper {
             @Override
             @NonNull
             public FileVisitResult postVisitDirectory(@NonNull Path dir, IOException exc) throws IOException {
+                if (exc != null) {
+                    log.warn("Error after visiting directory [{}]: {}", dir, exc.getMessage());
+                }
                 // Check if this directory should be treated as a folder-based audiobook
                 List<Path> audioFiles = dirAudioFiles.get(dir);
                 boolean hasNonAudioBooks = dirHasNonAudioBooks.getOrDefault(dir, false);

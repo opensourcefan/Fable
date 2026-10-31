@@ -233,4 +233,95 @@ class BookCreatorServiceTest {
                 .extracting(AuthorEntity::getName)
                 .containsExactly("Brand New");
     }
+
+    @Test
+    void addAuthorsToBook_duplicateAuthors_doesNotAddDuplicates() {
+        AuthorEntity author = AuthorEntity.builder().id(1L).name("Duplicate Writer").build();
+        bookEntity.getMetadata().setAuthors(new ArrayList<>(List.of(author)));
+        when(authorRepository.findByName("Duplicate Writer")).thenReturn(Optional.of(author));
+
+        bookCreatorService.addAuthorsToBook(List.of("Duplicate Writer", "Duplicate Writer"), bookEntity);
+
+        assertThat(bookEntity.getMetadata().getAuthors())
+                .hasSize(1)
+                .extracting(AuthorEntity::getName)
+                .containsExactly("Duplicate Writer");
+    }
+
+    @Test
+    void createShellBook_existingTemporarilyDeletedBook_restoresAndClearsDeletedAt(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) throws Exception {
+        java.nio.file.Path file = tempDir.resolve("comic.cbz");
+        java.nio.file.Files.writeString(file, "content");
+
+        org.fable.model.entity.LibraryEntity lib = new org.fable.model.entity.LibraryEntity();
+        lib.setId(1L);
+        org.fable.model.entity.LibraryPathEntity libPath = new org.fable.model.entity.LibraryPathEntity();
+        libPath.setId(2L);
+        libPath.setPath(tempDir.toString());
+
+        org.fable.model.dto.settings.LibraryFile libraryFile = org.fable.model.dto.settings.LibraryFile.builder()
+                .libraryEntity(lib)
+                .libraryPathEntity(libPath)
+                .fileSubPath("")
+                .fileName("comic.cbz")
+                .bookFileType(org.fable.model.enums.BookFileType.CBX)
+                .build();
+
+        BookEntity existing = new BookEntity();
+        existing.setId(50L);
+        existing.setDeleted(true);
+        existing.setDeletedAt(java.time.Instant.now());
+        existing.setRemovedFromLibrary(false);
+        org.fable.model.entity.BookFileEntity bf = new org.fable.model.entity.BookFileEntity();
+        bf.setBook(existing);
+        existing.setBookFiles(new ArrayList<>(List.of(bf)));
+
+        when(bookRepository.findByLibraryIdAndLibraryPathIdAndFileSubPathAndFileName(1L, 2L, "", "comic.cbz"))
+                .thenReturn(Optional.of(existing));
+
+        BookEntity result = bookCreatorService.createShellBook(libraryFile, org.fable.model.enums.BookFileType.CBX);
+
+        assertThat(result.getDeleted()).isFalse();
+        assertThat(result.getDeletedAt()).isNull();
+        assertThat(result.getAddedOn()).isNotNull();
+    }
+
+    @Test
+    void createShellBook_existingPermanentlyRemovedBook_keepsDeletedTrue(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) throws Exception {
+        java.nio.file.Path file = tempDir.resolve("removed.cbz");
+        java.nio.file.Files.writeString(file, "content");
+
+        org.fable.model.entity.LibraryEntity lib = new org.fable.model.entity.LibraryEntity();
+        lib.setId(1L);
+        org.fable.model.entity.LibraryPathEntity libPath = new org.fable.model.entity.LibraryPathEntity();
+        libPath.setId(2L);
+        libPath.setPath(tempDir.toString());
+
+        org.fable.model.dto.settings.LibraryFile libraryFile = org.fable.model.dto.settings.LibraryFile.builder()
+                .libraryEntity(lib)
+                .libraryPathEntity(libPath)
+                .fileSubPath("")
+                .fileName("removed.cbz")
+                .bookFileType(org.fable.model.enums.BookFileType.CBX)
+                .build();
+
+        java.time.Instant deletedTime = java.time.Instant.now();
+        BookEntity existing = new BookEntity();
+        existing.setId(51L);
+        existing.setDeleted(true);
+        existing.setDeletedAt(deletedTime);
+        existing.setRemovedFromLibrary(true);
+        org.fable.model.entity.BookFileEntity bf = new org.fable.model.entity.BookFileEntity();
+        bf.setBook(existing);
+        existing.setBookFiles(new ArrayList<>(List.of(bf)));
+
+        when(bookRepository.findByLibraryIdAndLibraryPathIdAndFileSubPathAndFileName(1L, 2L, "", "removed.cbz"))
+                .thenReturn(Optional.of(existing));
+
+        BookEntity result = bookCreatorService.createShellBook(libraryFile, org.fable.model.enums.BookFileType.CBX);
+
+        assertThat(result.getDeleted()).isTrue();
+        assertThat(result.getRemovedFromLibrary()).isTrue();
+        assertThat(result.getDeletedAt()).isEqualTo(deletedTime);
+    }
 }

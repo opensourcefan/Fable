@@ -751,6 +751,154 @@ class LibraryProcessingServiceTest {
         verify(bookGroupingService).groupForRescan(eq(Collections.emptyList()), any(LibraryEntity.class));
     }
 
+    @Test
+    void scanLibraryForNewFiles_shouldSkipInaccessiblePathAndScanRemainingAccessiblePaths(@TempDir Path tempDir) throws IOException {
+        long libraryId = 9L;
+        Path missingPath = tempDir.resolve("offline_mount");
+        Path accessiblePath = tempDir.resolve("comics_online");
+        Files.createDirectory(accessiblePath);
+
+        LibraryPathEntity offlinePathEntity = new LibraryPathEntity();
+        offlinePathEntity.setId(10L);
+        offlinePathEntity.setPath(missingPath.toString());
+
+        LibraryPathEntity onlinePathEntity = new LibraryPathEntity();
+        onlinePathEntity.setId(11L);
+        onlinePathEntity.setPath(accessiblePath.toString());
+
+        LibraryEntity libraryEntity = new LibraryEntity();
+        libraryEntity.setId(libraryId);
+        libraryEntity.setName("Comics");
+        libraryEntity.setLibraryPaths(List.of(offlinePathEntity, onlinePathEntity));
+
+        LibraryFile newComic = LibraryFile.builder()
+                .libraryEntity(libraryEntity)
+                .libraryPathEntity(onlinePathEntity)
+                .fileSubPath("")
+                .fileName("issue1.cbz")
+                .build();
+
+        when(libraryRepository.findById(libraryId)).thenReturn(Optional.of(libraryEntity));
+        when(bookRepository.findAllByLibraryIdWithFilesAndPathIncludingRemoved(libraryId)).thenReturn(Collections.emptyList());
+        when(bookAdditionalFileRepository.findByLibraryId(libraryId)).thenReturn(Collections.emptyList());
+        when(libraryFileHelper.getLibraryFiles(libraryEntity, List.of(onlinePathEntity))).thenReturn(List.of(newComic));
+        when(bookGroupingService.groupForInitialScan(anyList(), eq(libraryEntity)))
+                .thenReturn(Map.of("issue1.cbz", List.of(newComic)));
+
+        libraryProcessingService.scanLibraryForNewFiles(libraryId);
+
+        verify(failureNotificationService).reportError(contains("Skipping inaccessible path"));
+        verify(libraryFileHelper).getLibraryFiles(libraryEntity, List.of(onlinePathEntity));
+        verify(fileAsBookProcessor).processLibraryFilesGrouped(eq(Map.of("issue1.cbz", List.of(newComic))), eq(libraryEntity), any());
+    }
+
+    @Test
+    void scanLibraryForNewFiles_shouldThrowWhenAllPathsInaccessible(@TempDir Path tempDir) {
+        long libraryId = 10L;
+        Path missingPath = tempDir.resolve("offline_mount");
+
+        LibraryPathEntity offlinePathEntity = new LibraryPathEntity();
+        offlinePathEntity.setId(10L);
+        offlinePathEntity.setPath(missingPath.toString());
+
+        LibraryEntity libraryEntity = new LibraryEntity();
+        libraryEntity.setId(libraryId);
+        libraryEntity.setName("Comics");
+        libraryEntity.setLibraryPaths(List.of(offlinePathEntity));
+
+        when(libraryRepository.findById(libraryId)).thenReturn(Optional.of(libraryEntity));
+
+        assertThatThrownBy(() -> libraryProcessingService.scanLibraryForNewFiles(libraryId))
+                .isInstanceOf(APIException.class)
+                .hasMessageContaining("not accessible");
+    }
+
+    @Test
+    void scanLibraryForNewFiles_shouldSkipPermanentlyRemovedAndImportTempDeletedOrRenamed(@TempDir Path tempDir) throws IOException {
+        long libraryId = 11L;
+        LibraryPathEntity pathEntity = new LibraryPathEntity();
+        pathEntity.setId(10L);
+        pathEntity.setPath(tempDir.toString());
+
+        LibraryEntity libraryEntity = new LibraryEntity();
+        libraryEntity.setId(libraryId);
+        libraryEntity.setName("Comics");
+        libraryEntity.setLibraryPaths(List.of(pathEntity));
+
+        // Permanently deleted book (deleted=true, removedFromLibrary=true) is returned by findAllByLibraryIdWithFilesAndPathIncludingRemoved
+        BookEntity permanentlyRemovedBook = new BookEntity();
+        permanentlyRemovedBook.setId(100L);
+        permanentlyRemovedBook.setDeleted(true);
+        permanentlyRemovedBook.setRemovedFromLibrary(true);
+        permanentlyRemovedBook.setLibraryPath(pathEntity);
+        BookFileEntity permanentFile = new BookFileEntity();
+        permanentFile.setBook(permanentlyRemovedBook);
+        permanentFile.setFileSubPath("");
+        permanentFile.setFileName("perm_deleted.cbz");
+        permanentlyRemovedBook.setBookFiles(List.of(permanentFile));
+
+        LibraryFile permDeletedOnDisk = LibraryFile.builder()
+                .libraryEntity(libraryEntity)
+                .libraryPathEntity(pathEntity)
+                .fileSubPath("")
+                .fileName("perm_deleted.cbz")
+                .build();
+
+        LibraryFile tempDeletedSameNameOnDisk = LibraryFile.builder()
+                .libraryEntity(libraryEntity)
+                .libraryPathEntity(pathEntity)
+                .fileSubPath("")
+                .fileName("temp_deleted.cbz")
+                .build();
+
+        LibraryFile tempDeletedRenamedOnDisk = LibraryFile.builder()
+                .libraryEntity(libraryEntity)
+                .libraryPathEntity(pathEntity)
+                .fileSubPath("")
+                .fileName("renamed_issue.cbz")
+                .build();
+
+        when(libraryRepository.findById(libraryId)).thenReturn(Optional.of(libraryEntity));
+        when(bookRepository.findAllByLibraryIdWithFilesAndPathIncludingRemoved(libraryId))
+                .thenReturn(List.of(permanentlyRemovedBook));
+        when(bookAdditionalFileRepository.findByLibraryId(libraryId)).thenReturn(Collections.emptyList());
+        when(libraryFileHelper.getLibraryFiles(libraryEntity))
+                .thenReturn(List.of(permDeletedOnDisk, tempDeletedSameNameOnDisk, tempDeletedRenamedOnDisk));
+        when(bookGroupingService.groupForInitialScan(anyList(), eq(libraryEntity))).thenReturn(Collections.emptyMap());
+
+        libraryProcessingService.scanLibraryForNewFiles(libraryId);
+
+        ArgumentCaptor<List<LibraryFile>> captor = libraryFileListCaptor();
+        verify(bookGroupingService).groupForInitialScan(captor.capture(), eq(libraryEntity));
+
+        assertThat(captor.getValue())
+                .containsExactly(tempDeletedSameNameOnDisk, tempDeletedRenamedOnDisk)
+                .doesNotContain(permDeletedOnDisk);
+    }
+
+    @Test
+    void scanLibraryDirectoriesForNewFiles_shouldMatchNormalizedPathsWithTrailingSlash(@TempDir Path tempDir) throws IOException {
+        long libraryId = 12L;
+        LibraryPathEntity pathEntity = new LibraryPathEntity();
+        pathEntity.setId(10L);
+        pathEntity.setPath(tempDir.toString());
+
+        LibraryEntity libraryEntity = new LibraryEntity();
+        libraryEntity.setId(libraryId);
+        libraryEntity.setName("Comics");
+        libraryEntity.setLibraryPaths(List.of(pathEntity));
+
+        when(libraryRepository.findById(libraryId)).thenReturn(Optional.of(libraryEntity));
+        when(bookRepository.findAllByLibraryIdWithFilesAndPathIncludingRemoved(libraryId)).thenReturn(Collections.emptyList());
+        when(bookAdditionalFileRepository.findByLibraryId(libraryId)).thenReturn(Collections.emptyList());
+        when(libraryFileHelper.getLibraryFiles(libraryEntity, List.of(pathEntity))).thenReturn(Collections.emptyList());
+        when(bookGroupingService.groupForInitialScan(anyList(), eq(libraryEntity))).thenReturn(Collections.emptyMap());
+
+        libraryProcessingService.scanLibraryDirectoriesForNewFiles(libraryId, Set.of(tempDir.toString() + "/"));
+
+        verify(libraryFileHelper).getLibraryFiles(libraryEntity, List.of(pathEntity));
+    }
+
         @SuppressWarnings("unchecked")
         private ArgumentCaptor<List<LibraryFile>> libraryFileListCaptor() {
                 return (ArgumentCaptor<List<LibraryFile>>) (ArgumentCaptor<?>) ArgumentCaptor.forClass(List.class);
