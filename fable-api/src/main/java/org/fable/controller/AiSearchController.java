@@ -29,6 +29,15 @@ public class AiSearchController {
         return aiSearchHealthService.getStatus();
     }
 
+    @GetMapping("/scan-status")
+    public Map<String, Object> getScanStatus() {
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        boolean running = aiSearchService.isScanInProgress();
+        result.put("running", running);
+        result.put("progress", running ? aiSearchService.getLastBatchProgress() : null);
+        return result;
+    }
+
     @GetMapping("/llm-profiles")
     public List<AiLlmProfile> getLlmProfiles() {
         return appSettingService.getLlmProfiles();

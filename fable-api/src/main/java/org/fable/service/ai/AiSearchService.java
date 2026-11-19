@@ -1,6 +1,5 @@
 package org.fable.service.ai;
 
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.fable.config.AppProperties;
 import org.fable.model.dto.Book;
@@ -8,6 +7,9 @@ import org.fable.model.entity.BookEntity;
 import org.fable.model.entity.BookFileEntity;
 import org.fable.model.enums.BookFileType;
 import org.fable.model.websocket.Topic;
+import org.fable.service.network.NetworkErrorClassifier;
+import org.fable.service.network.NetworkOutageExhaustedException;
+import org.fable.service.network.NetworkResilienceService;
 import org.fable.task.TaskCancellationManager;
 import org.fable.repository.BookRepository;
 import org.fable.config.security.service.AuthenticationService;
@@ -16,6 +18,7 @@ import org.fable.service.book.BookCreatorService;
 import org.fable.service.reader.CbxReaderService;
 import org.fable.service.metadata.BookMetadataService;
 import org.fable.util.epub.EpubContentReader;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
@@ -44,11 +47,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class AiSearchService {
 
     private final AppProperties appProperties;
@@ -64,11 +67,74 @@ public class AiSearchService {
     private final org.fable.service.event.BookEventBroadcaster bookEventBroadcaster;
     private final TaskCancellationManager cancellationManager;
     private final CbxReaderService cbxReaderService;
+    private final NetworkResilienceService networkResilienceService;
 
     private static final int CHUNK_BATCH_SIZE = 50;
     private static final int MAX_CBX_IMAGE_BYTES = 2 * 1024 * 1024;  // 2 MB
+    private static final int MAX_SIDECAR_RECOVERY_RETRIES_PER_BOOK = 2;
 
     private final AtomicBoolean scanInProgress = new AtomicBoolean(false);
+    private volatile Map<String, Object> lastBatchProgress;
+
+    @Autowired
+    public AiSearchService(
+            AppProperties appProperties,
+            NotificationService notificationService,
+            BookRepository bookRepository,
+            AuthenticationService authenticationService,
+            AiSearchHealthService aiSearchHealthService,
+            org.fable.service.appsettings.AppSettingService appSettingService,
+            BookCreatorService bookCreatorService,
+            BookMetadataService bookMetadataService,
+            ObjectMapper objectMapper,
+            org.fable.service.book.BookService bookService,
+            org.fable.service.event.BookEventBroadcaster bookEventBroadcaster,
+            TaskCancellationManager cancellationManager,
+            CbxReaderService cbxReaderService,
+            NetworkResilienceService networkResilienceService) {
+        this.appProperties = appProperties;
+        this.notificationService = notificationService;
+        this.bookRepository = bookRepository;
+        this.authenticationService = authenticationService;
+        this.aiSearchHealthService = aiSearchHealthService;
+        this.appSettingService = appSettingService;
+        this.bookCreatorService = bookCreatorService;
+        this.bookMetadataService = bookMetadataService;
+        this.objectMapper = objectMapper;
+        this.bookService = bookService;
+        this.bookEventBroadcaster = bookEventBroadcaster;
+        this.cancellationManager = cancellationManager;
+        this.cbxReaderService = cbxReaderService;
+        this.networkResilienceService = networkResilienceService;
+    }
+
+    public AiSearchService(
+            AppProperties appProperties,
+            NotificationService notificationService,
+            BookRepository bookRepository,
+            AuthenticationService authenticationService,
+            AiSearchHealthService aiSearchHealthService,
+            org.fable.service.appsettings.AppSettingService appSettingService,
+            BookCreatorService bookCreatorService,
+            BookMetadataService bookMetadataService,
+            ObjectMapper objectMapper,
+            org.fable.service.book.BookService bookService,
+            org.fable.service.event.BookEventBroadcaster bookEventBroadcaster,
+            TaskCancellationManager cancellationManager,
+            CbxReaderService cbxReaderService) {
+        this(appProperties, notificationService, bookRepository, authenticationService,
+                aiSearchHealthService, appSettingService, bookCreatorService, bookMetadataService,
+                objectMapper, bookService, bookEventBroadcaster, cancellationManager,
+                cbxReaderService, null);
+    }
+
+    public boolean isScanInProgress() {
+        return scanInProgress.get();
+    }
+
+    public Map<String, Object> getLastBatchProgress() {
+        return lastBatchProgress;
+    }
 
     public void stopAiSearchScan() {
         scanInProgress.set(false);
@@ -142,6 +208,7 @@ public class AiSearchService {
             sendBatchProgress(username, "FAILED", "Scan failed: " + e.getMessage(), e.getMessage(), 0, 0, null, null);
         } finally {
             scanInProgress.set(false);
+            lastBatchProgress = null;
         }
     }
 
@@ -293,11 +360,42 @@ public class AiSearchService {
 
                     String title = resolveBookTitle(bookId);
                     sendBatchProgress(username, "IN_PROGRESS", "Processing: " + title + " (book " + (current + 1) + " of " + total + ")", null, current, total, null, null);
-                    extractAndEmbedBookInternal(bookId, userId, username, true, current, total);
+                    int recoveryAttempt = 0;
+                    while (true) {
+                        try {
+                            extractAndEmbedBookInternal(bookId, userId, username, true, current, total);
+                            break;
+                        } catch (Exception embedEx) {
+                            if (networkResilienceService != null
+                                    && NetworkErrorClassifier.isConnectivityError(embedEx)
+                                    && recoveryAttempt < MAX_SIDECAR_RECOVERY_RETRIES_PER_BOOK) {
+                                recoveryAttempt++;
+                                final int currentSnapshot = current;
+                                boolean recovered = networkResilienceService.waitForEndpointRecovery(
+                                        taskId,
+                                        appProperties.getAiSearch().getBaseUrl(),
+                                        NetworkResilienceService.SIDECAR_MAX_OUTAGE_WAIT,
+                                        pauseMsg -> sendBatchProgress(username, "IN_PROGRESS", pauseMsg, null, currentSnapshot, total, null, null));
+                                if (recovered) {
+                                    continue;
+                                }
+                                String outageMsg = "AI Search service remained unreachable; stopping scan so remaining marked books can be retried later.";
+                                sendBatchProgress(username, "FAILED", outageMsg, embedEx.getMessage(), current, total, importedBookTitles, failedBookTitles);
+                                throw new NetworkOutageExhaustedException(outageMsg, embedEx);
+                            }
+                            throw embedEx;
+                        }
+                    }
                     scannedCount++;
                     importedBookTitles.add(title);
                     // clear the flag
                     bookRepository.updateMarkedForAiSearch(List.of(bookId), false);
+                } catch (CancellationException e) {
+                    String stopMsg = String.format("Scan was cancelled. %d scanned, %d skipped, %d failed.", scannedCount, skippedCount, errorCount);
+                    sendBatchProgress(username, "STOPPED", stopMsg, null, current, total, null, null);
+                    return;
+                } catch (NetworkOutageExhaustedException e) {
+                    throw e;
                 } catch (Exception e) {
                     errorCount++;
                     log.error("Failed to embed book {} during marked scan: {}", bookId, e.getMessage());
@@ -318,6 +416,7 @@ public class AiSearchService {
             throw e;
         } finally {
             scanInProgress.set(false);
+            lastBatchProgress = null;
         }
     }
 
@@ -1223,6 +1322,11 @@ public class AiSearchService {
         }
         if (failedBooks != null && !failedBooks.isEmpty()) {
             payload.put("failedBooks", failedBooks);
+        }
+        if ("STARTED".equals(event) || "IN_PROGRESS".equals(event)) {
+            this.lastBatchProgress = Map.copyOf(payload);
+        } else {
+            this.lastBatchProgress = null;
         }
         notificationService.sendMessageToUser(username, Topic.AI_SEARCH_PROGRESS, payload);
     }

@@ -277,6 +277,7 @@ public class TaskService {
     }
 
     private void executeAsyncTask(String taskId, TaskCreateRequest request, TaskType taskType, FableUser user) {
+        cancellationManager.registerWorker(taskId, Thread.currentThread());
         try {
             taskHistoryService.updateTaskStatus(taskId, TaskStatus.IN_PROGRESS, "Task execution started");
             request.setTaskId(taskId);
@@ -286,9 +287,17 @@ public class TaskService {
                 return;
             }
             TaskCreateResponse response = executeTask(request);
-            if (cancellationManager.isTaskCancelled(taskId)) {
+            TaskStatus responseStatus = response != null ? response.getStatus() : null;
+            if (cancellationManager.isTaskCancelled(taskId) || responseStatus == TaskStatus.CANCELLED) {
                 log.info("Task {} was cancelled during execution", taskId);
                 taskHistoryService.updateTaskStatus(taskId, TaskStatus.CANCELLED, "Task was cancelled");
+            } else if (responseStatus == TaskStatus.FAILED) {
+                String errorMessage = "Task finished with errors";
+                log.warn("Async task {} of type {} returned FAILED status", taskId, taskType);
+                taskHistoryService.updateTaskError(taskId, errorMessage);
+                if (request.isTriggeredByCron()) {
+                    sendCronNotification(taskType, user, false, errorMessage, null);
+                }
             } else {
                 taskHistoryService.updateTaskStatus(taskId, TaskStatus.COMPLETED, "Task completed successfully");
                 if (request.isTriggeredByCron()) {
@@ -305,6 +314,7 @@ public class TaskService {
             if (!taskType.isParallel()) {
                 runningTasks.remove(taskType);
             }
+            cancellationManager.unregisterWorker(taskId);
             cancellationManager.clearCancellation(taskId);
         }
     }

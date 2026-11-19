@@ -674,6 +674,93 @@ class MetadataTaskServiceTest {
             }));
             assertThat(task.getStatusMessage()).contains("new-task");
         }
+
+        @Test
+        void shiftsComicVineIssueRangeWhenResumingContiguousSuffix() {
+            MetadataFetchJobEntity task = buildTask("resume-comics", MetadataFetchTaskStatus.ERROR, new ArrayList<>());
+            task.setRequestedBookIds(List.of(10L, 20L, 30L, 40L, 50L));
+            task.setCompletedBookIds(List.of(10L, 20L));
+
+            TaskHistoryEntity history = TaskHistoryEntity.builder()
+                    .id("resume-comics")
+                    .type(TaskType.REFRESH_METADATA_MANUAL)
+                    .taskOptions(Map.of())
+                    .build();
+
+            org.fable.model.dto.request.MetadataRefreshOptions originalOptions =
+                    org.fable.model.dto.request.MetadataRefreshOptions.builder()
+                            .issueRange("43-47")
+                            .build();
+            MetadataRefreshRequest originalRequest = MetadataRefreshRequest.builder()
+                    .refreshType(MetadataRefreshRequest.RefreshType.BOOKS)
+                    .bookIds(new java.util.LinkedHashSet<>(List.of(10L, 20L, 30L, 40L, 50L)))
+                    .refreshOptions(originalOptions)
+                    .build();
+
+            TaskCreateResponse resumedResponse = TaskCreateResponse.builder()
+                    .taskId("resumed-comics")
+                    .taskType(TaskType.REFRESH_METADATA_MANUAL)
+                    .status(TaskStatus.ACCEPTED)
+                    .build();
+
+            when(metadataFetchTaskRepository.findByTaskIdWithProposals("resume-comics")).thenReturn(Optional.of(task));
+            when(taskHistoryRepository.findById("resume-comics")).thenReturn(Optional.of(history));
+            when(objectMapper.convertValue(history.getTaskOptions(), MetadataRefreshRequest.class)).thenReturn(originalRequest);
+            when(taskService.runAsUser(any(TaskCreateRequest.class))).thenReturn(resumedResponse);
+
+            Optional<TaskCreateResponse> result = service.resumeMetadataTask("resume-comics");
+
+            assertThat(result).contains(resumedResponse);
+            verify(taskService).runAsUser(argThat(request -> {
+                MetadataRefreshRequest options = request.getOptionsAs(MetadataRefreshRequest.class);
+                return "45-47".equals(options.getRefreshOptions().getIssueRange())
+                        && options.getBookIds().equals(new java.util.LinkedHashSet<>(List.of(30L, 40L, 50L)));
+            }));
+            // Original options object must remain unmutated
+            assertThat(originalOptions.getIssueRange()).isEqualTo("43-47");
+        }
+
+        @Test
+        void resumesIsbnDiscoveryTaskWithPendingBooks() {
+            MetadataFetchJobEntity task = buildTask("resume-isbn", MetadataFetchTaskStatus.ERROR, new ArrayList<>());
+            task.setRequestedBookIds(List.of(1L, 2L, 3L));
+            task.setCompletedBookIds(List.of(1L));
+
+            TaskHistoryEntity history = TaskHistoryEntity.builder()
+                    .id("resume-isbn")
+                    .type(TaskType.ISBN_DISCOVERY)
+                    .taskOptions(Map.of())
+                    .build();
+
+            org.fable.model.dto.request.IsbnDiscoveryRequest originalIsbnRequest =
+                    org.fable.model.dto.request.IsbnDiscoveryRequest.builder()
+                            .bookIds(new java.util.LinkedHashSet<>(List.of(1L, 2L, 3L)))
+                            .providers(List.of(org.fable.model.enums.MetadataProvider.Google))
+                            .build();
+
+            TaskCreateResponse resumedResponse = TaskCreateResponse.builder()
+                    .taskId("resumed-isbn")
+                    .taskType(TaskType.ISBN_DISCOVERY)
+                    .status(TaskStatus.ACCEPTED)
+                    .build();
+
+            when(metadataFetchTaskRepository.findByTaskIdWithProposals("resume-isbn")).thenReturn(Optional.of(task));
+            when(taskHistoryRepository.findById("resume-isbn")).thenReturn(Optional.of(history));
+            when(objectMapper.convertValue(history.getTaskOptions(), org.fable.model.dto.request.IsbnDiscoveryRequest.class))
+                    .thenReturn(originalIsbnRequest);
+            when(taskService.runAsUser(any(TaskCreateRequest.class))).thenReturn(resumedResponse);
+
+            Optional<TaskCreateResponse> result = service.resumeMetadataTask("resume-isbn");
+
+            assertThat(result).contains(resumedResponse);
+            verify(taskService).runAsUser(argThat(request -> {
+                org.fable.model.dto.request.IsbnDiscoveryRequest options =
+                        request.getOptionsAs(org.fable.model.dto.request.IsbnDiscoveryRequest.class);
+                return request.getTaskType() == TaskType.ISBN_DISCOVERY
+                        && options.getBookIds().equals(new java.util.LinkedHashSet<>(List.of(2L, 3L)))
+                        && options.getProviders().equals(List.of(org.fable.model.enums.MetadataProvider.Google));
+            }));
+        }
     }
 
     @Nested

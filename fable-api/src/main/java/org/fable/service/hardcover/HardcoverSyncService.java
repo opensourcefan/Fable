@@ -5,6 +5,7 @@ import org.fable.model.entity.BookEntity;
 import org.fable.model.entity.BookMetadataEntity;
 import org.fable.repository.BookRepository;
 import org.fable.service.metadata.parser.hardcover.GraphQLRequest;
+import org.fable.service.network.NetworkErrorClassifier;
 import org.fable.service.network.OutboundHttpSupport;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -710,18 +711,35 @@ public class HardcoverSyncService {
     }
 
     private Map<String, Object> executeGraphQL(GraphQLRequest request) {
-        try {
-            return restClient.post()
-                    .uri("")
-                    .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + getApiToken())
-                    .body(request)
-                    .retrieve()
-                    .body(Map.class);
-        } catch (RestClientException e) {
-            log.error("GraphQL request failed: {}", e.getMessage());
-            return null;
+        long[] retryDelaysMs = {3_000L, 10_000L};
+        int maxAttempts = retryDelaysMs.length + 1;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                return restClient.post()
+                        .uri("")
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + getApiToken())
+                        .body(request)
+                        .retrieve()
+                        .body(Map.class);
+            } catch (RestClientException e) {
+                if (attempt < maxAttempts && NetworkErrorClassifier.isTransientFailure(e)) {
+                    long delayMs = retryDelaysMs[attempt - 1];
+                    log.warn("Transient Hardcover GraphQL error (attempt {}/{}). Retrying in {}ms: {}",
+                            attempt, maxAttempts, delayMs, e.getMessage());
+                    try {
+                        Thread.sleep(delayMs);
+                        continue;
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return null;
+                    }
+                }
+                log.error("GraphQL request failed: {}", e.getMessage());
+                return null;
+            }
         }
+        return null;
     }
 
     /**

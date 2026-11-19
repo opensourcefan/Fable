@@ -1,6 +1,5 @@
 package org.fable.service.metadata;
 
-import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.fable.config.security.service.AuthenticationService;
 import org.fable.exception.ApiError;
@@ -30,9 +29,12 @@ import org.fable.repository.MetadataFetchJobRepository;
 import org.fable.service.NotificationService;
 import org.fable.service.appsettings.AppSettingService;
 import org.fable.service.metadata.parser.BookParser;
+import org.fable.service.network.NetworkOutageExhaustedException;
+import org.fable.service.network.NetworkResilienceService;
 import org.fable.service.network.TransientProviderException;
 import org.fable.task.TaskStatus;
 import org.fable.task.TaskCancellationManager;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.hibernate.Hibernate;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -55,7 +57,6 @@ import org.fable.util.BookUtils;
 import static org.fable.model.enums.MetadataProvider.*;
 
 @Slf4j
-@AllArgsConstructor
 @Service
 public class MetadataRefreshService {
 
@@ -93,6 +94,66 @@ public class MetadataRefreshService {
     private final PlatformTransactionManager transactionManager;
     private final AuthenticationService authenticationService;
     private final TaskCancellationManager cancellationManager;
+    private final NetworkResilienceService networkResilienceService;
+
+    @Autowired
+    public MetadataRefreshService(
+            LibraryRepository libraryRepository,
+            MetadataFetchJobRepository metadataFetchJobRepository,
+            BookMapper bookMapper,
+            BookMetadataUpdater bookMetadataUpdater,
+            NotificationService notificationService,
+            AppSettingService appSettingService,
+            Map<MetadataProvider, BookParser> parserMap,
+            ObjectMapper objectMapper,
+            BookRepository bookRepository,
+            PlatformTransactionManager transactionManager,
+            AuthenticationService authenticationService,
+            TaskCancellationManager cancellationManager,
+            NetworkResilienceService networkResilienceService) {
+        this.libraryRepository = libraryRepository;
+        this.metadataFetchJobRepository = metadataFetchJobRepository;
+        this.bookMapper = bookMapper;
+        this.bookMetadataUpdater = bookMetadataUpdater;
+        this.notificationService = notificationService;
+        this.appSettingService = appSettingService;
+        this.parserMap = parserMap;
+        this.objectMapper = objectMapper;
+        this.bookRepository = bookRepository;
+        this.transactionManager = transactionManager;
+        this.authenticationService = authenticationService;
+        this.cancellationManager = cancellationManager;
+        this.networkResilienceService = networkResilienceService;
+    }
+
+    public MetadataRefreshService(
+            LibraryRepository libraryRepository,
+            MetadataFetchJobRepository metadataFetchJobRepository,
+            BookMapper bookMapper,
+            BookMetadataUpdater bookMetadataUpdater,
+            NotificationService notificationService,
+            AppSettingService appSettingService,
+            Map<MetadataProvider, BookParser> parserMap,
+            ObjectMapper objectMapper,
+            BookRepository bookRepository,
+            PlatformTransactionManager transactionManager,
+            AuthenticationService authenticationService,
+            TaskCancellationManager cancellationManager) {
+        this(libraryRepository, metadataFetchJobRepository, bookMapper, bookMetadataUpdater,
+                notificationService, appSettingService, parserMap, objectMapper, bookRepository,
+                transactionManager, authenticationService, cancellationManager, null);
+    }
+
+    public TaskStatus getTerminalTaskStatus(String taskId) {
+        if (taskId == null) {
+            return TaskStatus.COMPLETED;
+        }
+        return metadataFetchJobRepository.findById(taskId)
+                .map(MetadataFetchJobEntity::getStatus)
+                .map(this::mapTaskStatus)
+                .filter(status -> status != TaskStatus.IN_PROGRESS)
+                .orElse(TaskStatus.COMPLETED);
+    }
 
 
     public void refreshMetadata(MetadataRefreshRequest request, String jobId) {
@@ -170,13 +231,46 @@ public class MetadataRefreshService {
                     }
 
                     MetadataTaskContext.set(jobId, finalCompletedCount, totalBooks, plan.reviewMode());
-                    BookFetchOutcome fetchOutcome = fetchMetadataOutcomeForBook(
-                            plan.providers(),
-                            plan.book(),
-                            plan.refreshOptions(),
-                            finalIssueSequenceIndex);
-                    if (fetchOutcome.hasOnlyTransientFailures()) {
-                        throw fetchOutcome.firstTransientFailure();
+                    MetadataRefreshPlan finalPlan = plan;
+                    MetadataFetchJobEntity finalTask = task;
+                    int finalTotalBooks = totalBooks;
+                    BookFetchOutcome fetchOutcome;
+                    if (networkResilienceService != null) {
+                        fetchOutcome = networkResilienceService.executeWithOutageRecovery(
+                                jobId,
+                                finalPlan.providers(),
+                                NetworkResilienceService.DEFAULT_MAX_OUTAGE_WAIT,
+                                pauseMsg -> {
+                                    updateTaskSnapshot(finalTask, finalCompletedCount, pauseMsg);
+                                    sendBatchProgressNotification(
+                                            jobId,
+                                            finalCompletedCount,
+                                            finalTotalBooks,
+                                            pauseMsg,
+                                            MetadataFetchTaskStatus.IN_PROGRESS,
+                                            finalPlan.reviewMode()
+                                    );
+                                },
+                                () -> {
+                                    BookFetchOutcome outcome = fetchMetadataOutcomeForBook(
+                                            finalPlan.providers(),
+                                            finalPlan.book(),
+                                            finalPlan.refreshOptions(),
+                                            finalIssueSequenceIndex);
+                                    if (outcome.hasOnlyTransientFailures()) {
+                                        throw outcome.firstTransientFailure();
+                                    }
+                                    return outcome;
+                                });
+                    } else {
+                        fetchOutcome = fetchMetadataOutcomeForBook(
+                                plan.providers(),
+                                plan.book(),
+                                plan.refreshOptions(),
+                                finalIssueSequenceIndex);
+                        if (fetchOutcome.hasOnlyTransientFailures()) {
+                            throw fetchOutcome.firstTransientFailure();
+                        }
                     }
                     Map<MetadataProvider, BookMetadata> metadataMap = fetchOutcome.metadataMap();
                     if (plan.providers().contains(GoodReads)) {
@@ -189,6 +283,17 @@ public class MetadataRefreshService {
                     cancelTask(task);
                     cancellationManager.clearCancellation(jobId);
                     log.info("Metadata refresh task {} cancelled successfully", jobId);
+                    return;
+                } catch (NetworkOutageExhaustedException e) {
+                    int remainingBooks = Math.max(1, totalBooks - completedCount);
+                    String outageMessage = String.format(
+                            "Paused for network outage and timed out waiting for connection. %d of %d books remain and can be resumed.",
+                            remainingBooks,
+                            totalBooks
+                    );
+                    log.warn("Metadata refresh task {} stopping cleanly after network outage timeout ({} remaining)", jobId, remainingBooks);
+                    failTask(jobId, task, completedCount, totalBooks, outageMessage, isReviewMode);
+                    cancellationManager.clearCancellation(jobId);
                     return;
                 } catch (Exception e) {
                     failedCount++;
@@ -267,6 +372,7 @@ public class MetadataRefreshService {
 
             if (book.getMetadata().areAllFieldsLocked()) {
                 log.info("Skipping locked book: {}", getBookIdentifier(book));
+                markBookCompleted(task, bookId);
                 updateTaskSnapshot(task, completedCount, "Skipped locked book: " + book.getMetadata().getTitle());
                 sendBatchProgressNotification(jobId, completedCount, totalBooks, "Skipped locked book: " + book.getMetadata().getTitle(), MetadataFetchTaskStatus.IN_PROGRESS, false);
                 return null;
@@ -288,6 +394,7 @@ public class MetadataRefreshService {
 
             if (refreshOptions == null) {
                 log.warn("Skipping metadata refresh for book {} because no refresh options are configured.", getBookIdentifier(book));
+                markBookCompleted(task, bookId);
                 updateTaskSnapshot(task, completedCount, "Skipped: no metadata refresh options configured for " + book.getMetadata().getTitle());
                 sendBatchProgressNotification(
                         jobId,
@@ -322,6 +429,7 @@ public class MetadataRefreshService {
 
             if (book.getMetadata().areAllFieldsLocked()) {
                 log.info("Skipping locked book after metadata fetch: {}", getBookIdentifier(book));
+                markBookCompleted(task, bookId);
                 updateTaskSnapshot(task, completedCount, "Skipped locked book: " + book.getMetadata().getTitle());
                 sendBatchProgressNotification(jobId, completedCount, totalBooks, "Skipped locked book: " + book.getMetadata().getTitle(), MetadataFetchTaskStatus.IN_PROGRESS, plan.reviewMode());
                 return;
@@ -432,8 +540,15 @@ public class MetadataRefreshService {
         Map<MetadataProvider, TransientProviderException> transientFailures = new LinkedHashMap<>();
 
         for (MetadataProvider provider : providers) {
+            if (networkResilienceService != null && providers.size() > 1 && networkResilienceService.isCircuitOpen(provider)) {
+                log.debug("Skipping provider {} while its failure circuit is open", provider);
+                continue;
+            }
             try {
                 BookMetadata metadata = fetchMetadataFromProvider(provider, book, request);
+                if (networkResilienceService != null) {
+                    networkResilienceService.recordProviderSuccess(provider);
+                }
                 if (metadata != null && metadata.getProvider() != null) {
                     metadataMap.putIfAbsent(metadata.getProvider(), metadata);
                 }

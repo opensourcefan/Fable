@@ -50,7 +50,16 @@ public class OidcDiscoveryService {
             if (cached != null && !cached.isExpired()) {
                 return cached;
             }
-            return new CachedDiscovery(fetchDiscoveryDocument(key), Instant.now());
+            try {
+                return new CachedDiscovery(fetchDiscoveryDocument(key), Instant.now());
+            } catch (Exception e) {
+                if (cached != null) {
+                    log.warn("OIDC discovery refresh failed for {}; serving stale cached document until IdP recovers: {}",
+                            key, e.getMessage());
+                    return cached;
+                }
+                throw e;
+            }
         }).document();
     }
 
@@ -59,7 +68,7 @@ public class OidcDiscoveryService {
     }
 
     @SuppressWarnings("unchecked")
-    private DiscoveryDocument fetchDiscoveryDocument(String issuerUri) {
+    DiscoveryDocument fetchDiscoveryDocument(String issuerUri) {
         String discoveryUrl = issuerUri + "/.well-known/openid-configuration";
         log.info("Fetching OIDC discovery document from {}", discoveryUrl);
 

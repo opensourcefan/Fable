@@ -48,14 +48,19 @@ public class RefreshMetadataTask implements Task {
 
         metadataRefreshService.refreshMetadata(refreshRequest, taskId);
 
+        TaskStatus terminalStatus = metadataRefreshService.getTerminalTaskStatus(taskId);
+        if (terminalStatus == null) {
+            terminalStatus = TaskStatus.COMPLETED;
+        }
+
         long endTime = System.currentTimeMillis();
-        log.info("{}: Task completed. Duration: {} ms", getTaskType(), endTime - startTime);
+        log.info("{}: Task finished with status {}. Duration: {} ms", getTaskType(), terminalStatus, endTime - startTime);
 
         return TaskCreateResponse
                 .builder()
                 .taskType(TaskType.REFRESH_METADATA_MANUAL)
                 .taskId(taskId)
-                .status(TaskStatus.COMPLETED)
+                .status(terminalStatus)
                 .build();
     }
 

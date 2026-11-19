@@ -5,10 +5,12 @@ import org.fable.model.entity.BookdropFileEntity;
 import org.fable.model.enums.BookFileExtension;
 import org.fable.repository.BookdropFileRepository;
 import org.fable.service.appsettings.AppSettingService;
+import org.fable.service.network.TransientProviderException;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -17,12 +19,14 @@ import java.nio.file.Path;
 import java.nio.file.StandardWatchEventKinds;
 import java.nio.file.WatchEvent;
 import java.time.Instant;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class BookdropEventHandlerService {
 
     private final BookdropFileRepository bookdropFileRepository;
@@ -30,14 +34,43 @@ public class BookdropEventHandlerService {
     private final AppSettingService appSettingService;
     private final BookdropMetadataService bookdropMetadataService;
     private final BookdropInboxService bookdropInboxService;
+    private final TaskScheduler taskScheduler;
 
     private static final long STABILITY_CHECK_INTERVAL_MS = 500;
     private static final int STABILITY_REQUIRED_CHECKS = 3;
     private static final long STABILITY_MAX_WAIT_MS = 30_000;
+    private static final long[] RETRY_DELAYS_MS = {30_000L, 120_000L, 300_000L, 900_000L};
 
     private final BlockingQueue<BookDropFileEvent> fileQueue = new LinkedBlockingQueue<>();
+    private final Set<Long> scheduledRetries = ConcurrentHashMap.newKeySet();
     private volatile boolean running = true;
     private Thread workerThread;
+
+    @Autowired
+    public BookdropEventHandlerService(
+            BookdropFileRepository bookdropFileRepository,
+            BookdropNotificationService bookdropNotificationService,
+            AppSettingService appSettingService,
+            BookdropMetadataService bookdropMetadataService,
+            BookdropInboxService bookdropInboxService,
+            TaskScheduler taskScheduler) {
+        this.bookdropFileRepository = bookdropFileRepository;
+        this.bookdropNotificationService = bookdropNotificationService;
+        this.appSettingService = appSettingService;
+        this.bookdropMetadataService = bookdropMetadataService;
+        this.bookdropInboxService = bookdropInboxService;
+        this.taskScheduler = taskScheduler;
+    }
+
+    public BookdropEventHandlerService(
+            BookdropFileRepository bookdropFileRepository,
+            BookdropNotificationService bookdropNotificationService,
+            AppSettingService appSettingService,
+            BookdropMetadataService bookdropMetadataService,
+            BookdropInboxService bookdropInboxService) {
+        this(bookdropFileRepository, bookdropNotificationService, appSettingService,
+                bookdropMetadataService, bookdropInboxService, null);
+    }
 
     @PostConstruct
     public void init() {
@@ -123,7 +156,13 @@ public class BookdropEventHandlerService {
 
                 if (appSettingService.getAppSettings().isMetadataDownloadOnBookdrop()) {
                     bookdropMetadataService.attachInitialMetadata(bookdropFileEntity.getId());
-                    bookdropMetadataService.attachFetchedMetadata(bookdropFileEntity.getId());
+                    try {
+                        bookdropMetadataService.attachFetchedMetadata(bookdropFileEntity.getId());
+                    } catch (TransientProviderException e) {
+                        log.warn("Transient network failure fetching metadata for bookdrop file {} ({}); scheduling deferred retry: {}",
+                                bookdropFileEntity.getId(), bookdropFileEntity.getFileName(), e.getMessage());
+                        scheduleMetadataFetchRetry(bookdropFileEntity.getId(), 0);
+                    }
                 } else {
                     bookdropMetadataService.attachInitialMetadata(bookdropFileEntity.getId());
                     log.info("Metadata download is disabled. Only initial metadata extracted for file: {}", bookdropFileEntity.getFileName());
@@ -185,5 +224,67 @@ public class BookdropEventHandlerService {
 
         log.warn("File size did not stabilize after {}ms: {}", STABILITY_MAX_WAIT_MS, file);
         return false;
+    }
+
+    void scheduleMetadataFetchRetry(Long bookdropFileId, int attemptIndex) {
+        if (taskScheduler == null || !running || bookdropFileId == null) {
+            return;
+        }
+        if (attemptIndex >= RETRY_DELAYS_MS.length) {
+            scheduledRetries.remove(bookdropFileId);
+            return;
+        }
+        if (attemptIndex == 0 && !scheduledRetries.add(bookdropFileId)) {
+            log.debug("Deferred metadata retry already scheduled for bookdrop file {}", bookdropFileId);
+            return;
+        }
+        long delayMs = RETRY_DELAYS_MS[attemptIndex];
+        log.info("Scheduling deferred Bookdrop metadata retry {}/{} for file {} in {}s",
+                attemptIndex + 1, RETRY_DELAYS_MS.length, bookdropFileId, delayMs / 1000);
+        taskScheduler.schedule(
+                () -> runDeferredMetadataFetchRetry(bookdropFileId, attemptIndex),
+                Instant.now().plusMillis(delayMs));
+    }
+
+    void runDeferredMetadataFetchRetry(Long bookdropFileId, int attemptIndex) {
+        if (!running || bookdropFileId == null) {
+            if (bookdropFileId != null) {
+                scheduledRetries.remove(bookdropFileId);
+            }
+            return;
+        }
+        Optional<BookdropFileEntity> existingOpt = bookdropFileRepository.findById(bookdropFileId);
+        if (existingOpt.isEmpty()) {
+            scheduledRetries.remove(bookdropFileId);
+            return;
+        }
+        BookdropFileEntity existing = existingOpt.get();
+        if (existing.getStatus() != BookdropFileEntity.Status.PENDING_REVIEW
+                || (existing.getFetchedMetadata() != null && !existing.getFetchedMetadata().isBlank())) {
+            log.debug("Skipping deferred Bookdrop metadata retry for file {} (status={}, alreadyFetched={})",
+                    bookdropFileId, existing.getStatus(), existing.getFetchedMetadata() != null);
+            scheduledRetries.remove(bookdropFileId);
+            return;
+        }
+
+        try {
+            bookdropMetadataService.attachFetchedMetadata(bookdropFileId);
+            scheduledRetries.remove(bookdropFileId);
+            bookdropNotificationService.sendBookdropFileSummaryNotification();
+            log.info("Deferred Bookdrop metadata retry succeeded for file {} on attempt {}", bookdropFileId, attemptIndex + 1);
+        } catch (TransientProviderException e) {
+            if (attemptIndex + 1 < RETRY_DELAYS_MS.length) {
+                log.warn("Deferred Bookdrop metadata retry {} failed transiently for file {}: {}",
+                        attemptIndex + 1, bookdropFileId, e.getMessage());
+                scheduleMetadataFetchRetry(bookdropFileId, attemptIndex + 1);
+            } else {
+                scheduledRetries.remove(bookdropFileId);
+                log.warn("Exhausted {} deferred metadata fetch retries for bookdrop file {}; file remains PENDING_REVIEW.",
+                        RETRY_DELAYS_MS.length, bookdropFileId);
+            }
+        } catch (Exception e) {
+            scheduledRetries.remove(bookdropFileId);
+            log.error("Deferred Bookdrop metadata retry failed permanently for file {}: {}", bookdropFileId, e.getMessage());
+        }
     }
 }

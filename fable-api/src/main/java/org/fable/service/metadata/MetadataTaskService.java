@@ -14,6 +14,8 @@ import org.fable.model.dto.response.PendingMetadataReviewResponse;
 import org.fable.model.dto.response.StagingTriageResponse;
 import org.fable.model.dto.response.TaskCancelResponse;
 import org.fable.model.dto.response.TaskCreateResponse;
+import org.fable.model.dto.request.IsbnDiscoveryRequest;
+import org.fable.model.dto.request.MetadataRefreshOptions;
 import org.fable.model.dto.request.MetadataRefreshRequest;
 import org.fable.model.dto.request.TaskCreateRequest;
 import org.fable.model.entity.BookEntity;
@@ -45,6 +47,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.fable.task.TaskStatus.ACCEPTED;
 import static org.fable.task.TaskStatus.IN_PROGRESS;
@@ -53,6 +57,8 @@ import static org.fable.task.TaskStatus.FAILED;
 @Service
 @RequiredArgsConstructor
 public class MetadataTaskService {
+
+    private static final Pattern ISSUE_RANGE_PATTERN = Pattern.compile("^(\\d+)\\s*-\\s*(\\d+)$");
 
     private final MetadataFetchJobRepository metadataFetchTaskRepository;
     private final MetadataFetchProposalRepository proposalRepository;
@@ -177,7 +183,8 @@ public class MetadataTaskService {
 
     public Optional<TaskCancelResponse> cancelMetadataTask(String taskId) {
         return taskHistoryRepository.findById(taskId)
-                .filter(task -> task.getType() == TaskType.REFRESH_METADATA_MANUAL)
+                .filter(task -> task.getType() == TaskType.REFRESH_METADATA_MANUAL
+                        || task.getType() == TaskType.ISBN_DISCOVERY)
                 .map(task -> taskService.cancelTask(taskId));
     }
 
@@ -239,23 +246,46 @@ public class MetadataTaskService {
         }
 
         TaskHistoryEntity originalTask = taskHistoryRepository.findById(taskId).orElse(null);
-        if (originalTask == null || originalTask.getType() != TaskType.REFRESH_METADATA_MANUAL) {
+        if (originalTask == null
+                || (originalTask.getType() != TaskType.REFRESH_METADATA_MANUAL
+                && originalTask.getType() != TaskType.ISBN_DISCOVERY)) {
             return Optional.empty();
         }
 
-        MetadataRefreshRequest originalRequest = objectMapper.convertValue(originalTask.getTaskOptions(), MetadataRefreshRequest.class);
-        MetadataRefreshRequest resumeRequest = MetadataRefreshRequest.builder()
-                .refreshType(MetadataRefreshRequest.RefreshType.BOOKS)
-                .bookIds(pendingBookIds)
-                .refreshOptions(originalRequest.getRefreshOptions())
-                .targetMode(MetadataRefreshRequest.TargetMode.ALL)
-                .build();
+        TaskCreateRequest taskCreateRequest;
+        if (originalTask.getType() == TaskType.ISBN_DISCOVERY) {
+            IsbnDiscoveryRequest originalIsbnRequest = originalTask.getTaskOptions() != null
+                    ? objectMapper.convertValue(originalTask.getTaskOptions(), IsbnDiscoveryRequest.class)
+                    : null;
+            IsbnDiscoveryRequest resumeIsbnRequest = IsbnDiscoveryRequest.builder()
+                    .bookIds(pendingBookIds)
+                    .providers(originalIsbnRequest != null ? originalIsbnRequest.getProviders() : null)
+                    .build();
+            taskCreateRequest = TaskCreateRequest.builder()
+                    .taskType(TaskType.ISBN_DISCOVERY)
+                    .triggeredByCron(false)
+                    .options(resumeIsbnRequest)
+                    .build();
+        } else {
+            MetadataRefreshRequest originalRequest = objectMapper.convertValue(originalTask.getTaskOptions(), MetadataRefreshRequest.class);
+            MetadataRefreshOptions resumeOptions = shiftIssueRangeForResume(
+                    originalRequest != null ? originalRequest.getRefreshOptions() : null,
+                    resolveRequestedBookIds(task),
+                    pendingBookIds
+            );
+            MetadataRefreshRequest resumeRequest = MetadataRefreshRequest.builder()
+                    .refreshType(MetadataRefreshRequest.RefreshType.BOOKS)
+                    .bookIds(pendingBookIds)
+                    .refreshOptions(resumeOptions)
+                    .targetMode(MetadataRefreshRequest.TargetMode.ALL)
+                    .build();
 
-        TaskCreateRequest taskCreateRequest = TaskCreateRequest.builder()
-                .taskType(TaskType.REFRESH_METADATA_MANUAL)
-                .triggeredByCron(false)
-                .options(resumeRequest)
-                .build();
+            taskCreateRequest = TaskCreateRequest.builder()
+                    .taskType(TaskType.REFRESH_METADATA_MANUAL)
+                    .triggeredByCron(false)
+                    .options(resumeRequest)
+                    .build();
+        }
 
         TaskCreateResponse resumedTask = taskService.runAsUser(taskCreateRequest);
         task.setCompletedBookIds(requestedAsList(task));
@@ -263,6 +293,51 @@ public class MetadataTaskService {
         metadataFetchTaskRepository.save(task);
 
         return Optional.of(resumedTask);
+    }
+
+    MetadataRefreshOptions shiftIssueRangeForResume(
+            MetadataRefreshOptions originalOptions,
+            List<Long> requestedBookIds,
+            LinkedHashSet<Long> pendingBookIds) {
+        if (originalOptions == null || !StringUtils.hasText(originalOptions.getIssueRange())
+                || requestedBookIds == null || requestedBookIds.isEmpty()
+                || pendingBookIds == null || pendingBookIds.isEmpty()) {
+            return originalOptions;
+        }
+
+        String rawRange = originalOptions.getIssueRange().trim();
+        Matcher matcher = ISSUE_RANGE_PATTERN.matcher(rawRange);
+        if (!matcher.matches()) {
+            return originalOptions;
+        }
+
+        List<Long> pendingList = new ArrayList<>(pendingBookIds);
+        int offset = requestedBookIds.size() - pendingList.size();
+        if (offset <= 0 || !requestedBookIds.subList(offset, requestedBookIds.size()).equals(pendingList)) {
+            return originalOptions;
+        }
+
+        int start = Integer.parseInt(matcher.group(1));
+        int end = Integer.parseInt(matcher.group(2));
+        if (start > end) {
+            int tmp = start;
+            start = end;
+            end = tmp;
+        }
+        int shiftedStart = Math.min(start + offset, end);
+
+        return MetadataRefreshOptions.builder()
+                .libraryId(originalOptions.getLibraryId())
+                .refreshCovers(originalOptions.isRefreshCovers())
+                .mergeCategories(originalOptions.isMergeCategories())
+                .reviewBeforeApply(originalOptions.getReviewBeforeApply())
+                .sourceUrl(originalOptions.getSourceUrl())
+                .issueNumber(originalOptions.getIssueNumber())
+                .issueRange(shiftedStart + "-" + end)
+                .replaceMode(originalOptions.getReplaceMode())
+                .fieldOptions(originalOptions.getFieldOptions())
+                .enabledFields(originalOptions.getEnabledFields())
+                .build();
     }
 
     private MetadataTaskDetailsResponse buildTaskDetailsResponse(MetadataFetchJobEntity task) {

@@ -91,7 +91,7 @@ public class GeoIpService {
         } catch (Exception e) {
             log.debug("Failed to resolve country code for IP");
         }
-        return "";
+        return null;
     }
 
     private boolean isPrivateOrLocal(String ip) {

@@ -19,6 +19,8 @@ import org.fable.service.NotificationService;
 import org.fable.service.book.BookUpdateService;
 import org.fable.service.metadata.IsbnMetadataFillService;
 import org.fable.service.metadata.MetadataTaskContext;
+import org.fable.service.network.NetworkOutageExhaustedException;
+import org.fable.service.network.NetworkResilienceService;
 import org.fable.task.TaskCancellationManager;
 import org.fable.task.TaskStatus;
 import org.springframework.stereotype.Component;
@@ -26,7 +28,10 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 
 import static org.fable.exception.ApiError.PERMISSION_DENIED;
 import static org.fable.model.enums.UserPermission.CAN_BULK_AUTO_FETCH_METADATA;
@@ -49,6 +54,7 @@ public class IsbnDiscoveryTask implements Task {
     private final AuthenticationService authenticationService;
     private final TaskCancellationManager cancellationManager;
     private final ObjectMapper objectMapper;
+    private final NetworkResilienceService networkResilienceService;
 
     @Override
     public void validatePermissions(FableUser user, TaskCreateRequest request) {
@@ -113,8 +119,23 @@ public class IsbnDiscoveryTask implements Task {
 
             MetadataTaskContext.set(taskId, completed, total, reviewCount > 0);
             try {
-                IsbnMetadataFillService.IsbnFillOutcome outcome =
-                        isbnMetadataFillService.fillBookFromIsbn(bookId, options != null ? options.getProviders() : null);
+                final int currentCompleted = completed;
+                final int currentReviewCount = reviewCount;
+                var requestedProviders = options != null ? options.getProviders() : null;
+                IsbnMetadataFillService.IsbnFillOutcome outcome = networkResilienceService != null
+                        ? networkResilienceService.executeWithOutageRecovery(
+                                taskId,
+                                requestedProviders,
+                                NetworkResilienceService.DEFAULT_MAX_OUTAGE_WAIT,
+                                pauseMsg -> {
+                                    job.setStatusMessage(pauseMsg);
+                                    metadataFetchJobRepository.save(job);
+                                    sendProgress(taskId, currentCompleted, total, pauseMsg,
+                                            MetadataFetchTaskStatus.IN_PROGRESS, currentReviewCount > 0,
+                                            MetadataBatchProgressNotification.PHASE_ISBN_DISCOVERY);
+                                },
+                                () -> isbnMetadataFillService.fillBookFromIsbn(bookId, requestedProviders))
+                        : isbnMetadataFillService.fillBookFromIsbn(bookId, requestedProviders);
                 if (outcome.status() == IsbnMetadataFillService.IsbnFillOutcome.Status.NEEDS_REVIEW
                         && outcome.metadata() != null) {
                     MetadataFetchProposalEntity proposal = MetadataFetchProposalEntity.builder()
@@ -133,6 +154,7 @@ public class IsbnDiscoveryTask implements Task {
                     log.info("ISBN discovery did not fill book {}: {}", bookId, outcome.message());
                 }
                 completed++;
+                markBookCompleted(job, bookId);
                 job.setCompletedBooks(completed);
                 job.setStatusMessage(buildProgressMessage(bookId, outcome));
                 metadataFetchJobRepository.save(job);
@@ -145,6 +167,35 @@ public class IsbnDiscoveryTask implements Task {
                         MetadataFetchTaskStatus.IN_PROGRESS,
                         reviewCount > 0,
                         postPhase);
+            } catch (CancellationException e) {
+                job.setStatus(MetadataFetchTaskStatus.CANCELLED);
+                job.setCompletedAt(Instant.now());
+                job.setStatusMessage("Task cancelled by user");
+                metadataFetchJobRepository.save(job);
+                sendProgress(taskId, completed, total, "Cancelled", MetadataFetchTaskStatus.CANCELLED, reviewCount > 0, null);
+                cancellationManager.clearCancellation(taskId);
+                return TaskCreateResponse.builder()
+                        .taskType(TaskType.ISBN_DISCOVERY)
+                        .taskId(taskId)
+                        .status(TaskStatus.CANCELLED)
+                        .build();
+            } catch (NetworkOutageExhaustedException e) {
+                int remainingBooks = Math.max(1, total - completed);
+                String outageMsg = String.format(
+                        "Paused for network outage and timed out waiting for connection. %d of %d books remain and can be resumed.",
+                        remainingBooks, total);
+                log.warn("ISBN discovery task {} stopping cleanly after network outage timeout ({} remaining)", taskId, remainingBooks);
+                job.setStatus(MetadataFetchTaskStatus.ERROR);
+                job.setCompletedAt(Instant.now());
+                job.setCompletedBooks(completed);
+                job.setStatusMessage(outageMsg);
+                metadataFetchJobRepository.save(job);
+                sendProgress(taskId, completed, total, outageMsg, MetadataFetchTaskStatus.ERROR, reviewCount > 0, null);
+                return TaskCreateResponse.builder()
+                        .taskType(TaskType.ISBN_DISCOVERY)
+                        .taskId(taskId)
+                        .status(TaskStatus.FAILED)
+                        .build();
             } catch (Exception e) {
                 log.error("ISBN discovery failed for book {}", bookId, e);
                 completed++;
@@ -161,7 +212,9 @@ public class IsbnDiscoveryTask implements Task {
             }
         }
 
-        job.setStatus(MetadataFetchTaskStatus.COMPLETED);
+        boolean allFailed = total > 0 && failedCount == total;
+        MetadataFetchTaskStatus finalJobStatus = allFailed ? MetadataFetchTaskStatus.ERROR : MetadataFetchTaskStatus.COMPLETED;
+        job.setStatus(finalJobStatus);
         job.setCompletedAt(Instant.now());
         job.setCompletedBooks(completed);
         String finalMessage = buildFinalMessage(reviewCount, failedCount, completed);
@@ -171,16 +224,27 @@ public class IsbnDiscoveryTask implements Task {
         // Mirror MetadataTaskService.getActiveTasks semantics so the Review button stays visible:
         // completed = accepted count (0), total = pending FETCHED proposals.
         if (reviewCount > 0) {
-            sendProgress(taskId, 0, reviewCount, finalMessage, MetadataFetchTaskStatus.COMPLETED, true, null);
+            sendProgress(taskId, 0, reviewCount, finalMessage, finalJobStatus, true, null);
         } else {
-            sendProgress(taskId, completed, total, finalMessage, MetadataFetchTaskStatus.COMPLETED, false, null);
+            sendProgress(taskId, completed, total, finalMessage, finalJobStatus, false, null);
         }
 
         return TaskCreateResponse.builder()
                 .taskType(TaskType.ISBN_DISCOVERY)
                 .taskId(taskId)
-                .status(TaskStatus.COMPLETED)
+                .status(allFailed ? TaskStatus.FAILED : TaskStatus.COMPLETED)
                 .build();
+    }
+
+    private void markBookCompleted(MetadataFetchJobEntity job, Long bookId) {
+        if (job == null || bookId == null) {
+            return;
+        }
+        List<Long> completedIds = new ArrayList<>(Optional.ofNullable(job.getCompletedBookIds()).orElseGet(ArrayList::new));
+        if (!completedIds.contains(bookId)) {
+            completedIds.add(bookId);
+            job.setCompletedBookIds(completedIds);
+        }
     }
 
     private void stageBookForReview(Long bookId) {
