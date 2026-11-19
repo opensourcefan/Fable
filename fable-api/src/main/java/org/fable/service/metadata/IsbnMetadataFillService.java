@@ -24,8 +24,11 @@ import org.fable.service.appsettings.AppSettingService;
 import org.fable.service.NotificationService;
 import org.fable.service.metadata.parser.BookParser;
 import org.fable.service.metadata.parser.ParserUtils;
+import org.fable.service.network.TransientProviderException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.File;
 import java.nio.file.Path;
@@ -34,6 +37,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 /**
@@ -42,7 +46,6 @@ import java.util.stream.Stream;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class IsbnMetadataFillService {
 
     private final AppSettingService appSettingService;
@@ -54,6 +57,57 @@ public class IsbnMetadataFillService {
     private final IsbnDiscoveryStatusService isbnDiscoveryStatusService;
     private final NotificationService notificationService;
     private final Map<MetadataProvider, BookParser> parserMap;
+    private final PlatformTransactionManager transactionManager;
+
+    public IsbnMetadataFillService(
+            AppSettingService appSettingService,
+            BookRepository bookRepository,
+            BookMapper bookMapper,
+            BookMetadataService bookMetadataService,
+            BookMetadataUpdater bookMetadataUpdater,
+            IsbnDiscoveryService isbnDiscoveryService,
+            IsbnDiscoveryStatusService isbnDiscoveryStatusService,
+            NotificationService notificationService,
+            Map<MetadataProvider, BookParser> parserMap) {
+        this(appSettingService, bookRepository, bookMapper, bookMetadataService, bookMetadataUpdater,
+                isbnDiscoveryService, isbnDiscoveryStatusService, notificationService, parserMap, null);
+    }
+
+    @Autowired
+    public IsbnMetadataFillService(
+            AppSettingService appSettingService,
+            BookRepository bookRepository,
+            BookMapper bookMapper,
+            BookMetadataService bookMetadataService,
+            BookMetadataUpdater bookMetadataUpdater,
+            IsbnDiscoveryService isbnDiscoveryService,
+            IsbnDiscoveryStatusService isbnDiscoveryStatusService,
+            NotificationService notificationService,
+            Map<MetadataProvider, BookParser> parserMap,
+            PlatformTransactionManager transactionManager) {
+        this.appSettingService = appSettingService;
+        this.bookRepository = bookRepository;
+        this.bookMapper = bookMapper;
+        this.bookMetadataService = bookMetadataService;
+        this.bookMetadataUpdater = bookMetadataUpdater;
+        this.isbnDiscoveryService = isbnDiscoveryService;
+        this.isbnDiscoveryStatusService = isbnDiscoveryStatusService;
+        this.notificationService = notificationService;
+        this.parserMap = parserMap;
+        this.transactionManager = transactionManager;
+    }
+
+    record IsbnMergeOutcome(BookMetadata merged, TransientProviderException firstTransientFailure) {
+        boolean failedDueToNetwork() {
+            return merged == null && firstTransientFailure != null;
+        }
+    }
+
+    private record PreparedIsbnBook(
+            BookMetadata existing,
+            Path filePath,
+            IsbnFillOutcome earlyOutcome
+    ) {}
 
     /**
      * Fetch metadata from each configured provider by ISBN and merge:
@@ -67,15 +121,27 @@ public class IsbnMetadataFillService {
             String isbn,
             BookMetadata existingHints,
             List<MetadataProvider> selectedProviders) {
+        IsbnMergeOutcome outcome = mergeByIsbnOutcome(isbn, existingHints, selectedProviders);
+        if (outcome.failedDueToNetwork()) {
+            throw outcome.firstTransientFailure();
+        }
+        return outcome.merged();
+    }
+
+    IsbnMergeOutcome mergeByIsbnOutcome(
+            String isbn,
+            BookMetadata existingHints,
+            List<MetadataProvider> selectedProviders) {
         String cleaned = ParserUtils.cleanIsbn(isbn);
         if (!ParserUtils.isValidIsbnChecksum(cleaned)) {
-            return null;
+            return new IsbnMergeOutcome(null, null);
         }
 
         List<MetadataProvider> providers = selectedProviders == null || selectedProviders.isEmpty()
                 ? deriveProviderChain()
                 : new ArrayList<>(new LinkedHashSet<>(selectedProviders));
         BookMetadata merged = null;
+        TransientProviderException firstTransientFailure = null;
         Book emptyBook = Book.builder().metadata(existingHints).build();
         FetchMetadataRequest request = FetchMetadataRequest.builder()
                 .isbn(cleaned)
@@ -98,13 +164,18 @@ public class IsbnMetadataFillService {
                 } else {
                     fillMissingFields(merged, candidate);
                 }
+            } catch (TransientProviderException e) {
+                log.warn("ISBN multi-pass fetch encountered transient network error for provider {}: {}", provider, e.getMessage());
+                if (firstTransientFailure == null) {
+                    firstTransientFailure = e;
+                }
             } catch (Exception e) {
                 log.warn("ISBN multi-pass fetch failed for provider {}: {}", provider, e.getMessage());
             }
         }
 
         if (merged == null) {
-            return null;
+            return new IsbnMergeOutcome(null, firstTransientFailure);
         }
 
         if (merged.getIsbn13() == null || merged.getIsbn13().isBlank()) {
@@ -120,7 +191,7 @@ public class IsbnMetadataFillService {
             }
         }
         merged.setIsbnVerified(Boolean.TRUE);
-        return merged;
+        return new IsbnMergeOutcome(merged, firstTransientFailure);
     }
 
     /**
@@ -128,31 +199,38 @@ public class IsbnMetadataFillService {
      * then auto-apply or return metadata for review based on ISBN-scoped setting.
      * Ambiguous discoveries that still have a best candidate are fetched and always staged.
      */
-    @Transactional
     public IsbnFillOutcome fillBookFromIsbn(long bookId) {
         return fillBookFromIsbn(bookId, null);
     }
 
-    @Transactional
     public IsbnFillOutcome fillBookFromIsbn(long bookId, List<MetadataProvider> selectedProviders) {
         AppSettings settings = appSettingService.getAppSettings();
         if (!settings.isIsbnDiscoveryEnabled()) {
             return IsbnFillOutcome.disabled(bookId);
         }
 
-        BookEntity book = bookRepository.findById(bookId)
-                .orElseThrow(() -> ApiError.BOOK_NOT_FOUND.createException(bookId));
-        BookMetadataEntity entityMeta = book.getMetadata();
-        if (entityMeta == null) {
-            String failMessage = "Book has no metadata entity";
-            isbnDiscoveryStatusService.recordError(book, failMessage);
-            return IsbnFillOutcome.error(bookId, failMessage);
-        }
-        if (entityMeta.areAllFieldsLocked()) {
-            return IsbnFillOutcome.skipped(bookId, "All metadata fields locked");
+        PreparedIsbnBook prepared = inTransaction(() -> {
+            BookEntity book = bookRepository.findById(bookId)
+                    .orElseThrow(() -> ApiError.BOOK_NOT_FOUND.createException(bookId));
+            BookMetadataEntity entityMeta = book.getMetadata();
+            if (entityMeta == null) {
+                String failMessage = "Book has no metadata entity";
+                isbnDiscoveryStatusService.recordError(book, failMessage);
+                return new PreparedIsbnBook(null, null, IsbnFillOutcome.error(bookId, failMessage));
+            }
+            if (entityMeta.areAllFieldsLocked()) {
+                return new PreparedIsbnBook(null, null, IsbnFillOutcome.skipped(bookId, "All metadata fields locked"));
+            }
+            BookMetadata existing = bookMapper.toBook(book).getMetadata();
+            Path path = book.getFullFilePath();
+            return new PreparedIsbnBook(existing, path, null);
+        });
+
+        if (prepared.earlyOutcome() != null) {
+            return prepared.earlyOutcome();
         }
 
-        BookMetadata existing = bookMapper.toBook(book).getMetadata();
+        BookMetadata existing = prepared.existing();
         String isbn = firstNonBlank(existing != null ? existing.getIsbn13() : null,
                 existing != null ? existing.getIsbn10() : null);
 
@@ -160,11 +238,14 @@ public class IsbnMetadataFillService {
         boolean forceReview = false;
         IsbnDiscoveryResult discovery = null;
         if (isbn == null || !ParserUtils.isValidIsbnChecksum(isbn)) {
-            Path path = book.getFullFilePath();
+            Path path = prepared.filePath();
             if (path == null) {
                 String failMessage = "No ISBN on file and no resolvable file path for discovery";
                 emitPhaseProgress(MetadataBatchProgressNotification.PHASE_ISBN_FAILED, failMessage);
-                isbnDiscoveryStatusService.recordError(book, failMessage);
+                inTransaction(() -> {
+                    bookRepository.findById(bookId).ifPresent(b -> isbnDiscoveryStatusService.recordError(b, failMessage));
+                    return null;
+                });
                 return IsbnFillOutcome.error(bookId, failMessage);
             }
             emitPhaseProgress(MetadataBatchProgressNotification.PHASE_ISBN_DISCOVERY,
@@ -184,17 +265,30 @@ public class IsbnMetadataFillService {
                         ? discovery.getMessage()
                         : "No checksum-valid ISBN found";
                 emitPhaseProgress(MetadataBatchProgressNotification.PHASE_ISBN_FAILED, failMessage);
-                recordDiscoveryProblem(book, discovery, failMessage);
+                IsbnDiscoveryResult finalDiscovery = discovery;
+                inTransaction(() -> {
+                    bookRepository.findById(bookId).ifPresent(b -> recordDiscoveryProblem(b, finalDiscovery, failMessage));
+                    return null;
+                });
                 return IsbnFillOutcome.error(bookId, failMessage);
             }
         }
 
-        isbnDiscoveryStatusService.clearRecordedProblem(book);
+        inTransaction(() -> {
+            bookRepository.findById(bookId).ifPresent(isbnDiscoveryStatusService::clearRecordedProblem);
+            return null;
+        });
+
         emitPhaseProgress(MetadataBatchProgressNotification.PHASE_METADATA_FETCH,
                 "Metadata fetch — book " + bookProgressLabel() + "…");
-        BookMetadata merged = mergeByIsbn(isbn, existing, selectedProviders);
+        IsbnMergeOutcome mergeOutcome = mergeByIsbnOutcome(isbn, existing, selectedProviders);
+        if (mergeOutcome.failedDueToNetwork()) {
+            // Never clear unlocked metadata when all providers failed due to a network outage.
+            throw mergeOutcome.firstTransientFailure();
+        }
+        BookMetadata merged = mergeOutcome.merged();
         if (merged == null) {
-            // Verified ISBN with no provider hits: still clear unlocked fields and apply the ISBN.
+            // Verified ISBN with no provider hits (genuine 0-result response): still clear unlocked fields and apply the ISBN.
             // Ambiguous (forceReview) discoveries stay in the review queue.
             if (forceReview || settings.isIsbnFetchReviewBeforeApply()) {
                 BookMetadata stub = existing != null ? existing.toBuilder().build() : BookMetadata.builder().build();
@@ -213,7 +307,8 @@ public class IsbnMetadataFillService {
                     .isbn10(ParserUtils.toIsbn10(isbn))
                     .isbnVerified(Boolean.TRUE)
                     .build();
-            return applyMergedMetadata(bookId, book, isbnOnly, discovered, settings, false);
+            boolean finalDiscovered = discovered;
+            return inTransaction(() -> applyMergedMetadata(bookId, isbnOnly, finalDiscovered, settings, false));
         }
 
         boolean requireReview = forceReview || settings.isIsbnFetchReviewBeforeApply();
@@ -226,7 +321,15 @@ public class IsbnMetadataFillService {
                     .withMetadata(merged);
         }
 
-        return applyMergedMetadata(bookId, book, merged, discovered, settings, true);
+        boolean finalDiscovered = discovered;
+        return inTransaction(() -> applyMergedMetadata(bookId, merged, finalDiscovered, settings, true));
+    }
+
+    private <T> T inTransaction(Supplier<T> action) {
+        if (transactionManager == null) {
+            return action.get();
+        }
+        return new TransactionTemplate(transactionManager).execute(status -> action.get());
     }
 
     private void recordDiscoveryProblem(
@@ -248,11 +351,15 @@ public class IsbnMetadataFillService {
 
     private IsbnFillOutcome applyMergedMetadata(
             long bookId,
-            BookEntity book,
             BookMetadata merged,
             boolean discovered,
             AppSettings settings,
             boolean updateThumbnail) {
+        BookEntity book = bookRepository.findById(bookId)
+                .orElseThrow(() -> ApiError.BOOK_NOT_FOUND.createException(bookId));
+        if (book.getMetadata() != null && book.getMetadata().areAllFieldsLocked()) {
+            return IsbnFillOutcome.skipped(bookId, "All metadata fields locked");
+        }
         boolean multiPass = settings.getIsbnFillMode() == null
                 || "MULTI_PASS".equalsIgnoreCase(settings.getIsbnFillMode());
         if (multiPass) {

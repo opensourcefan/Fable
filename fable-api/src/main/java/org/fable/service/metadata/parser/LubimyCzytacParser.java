@@ -7,6 +7,8 @@ import org.fable.model.dto.BookMetadata;
 import org.fable.model.dto.request.FetchMetadataRequest;
 import org.fable.model.enums.MetadataProvider;
 import org.fable.service.appsettings.AppSettingService;
+import org.fable.service.network.NetworkErrorClassifier;
+import org.fable.service.network.TransientProviderException;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -100,6 +102,8 @@ public class LubimyCzytacParser implements BookParser {
             log.info("Found {} LubimyCzytac results for query: {}", results.size(), query);
             return results;
 
+        } catch (TransientProviderException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Error fetching LubimyCzytac metadata", e);
             return new ArrayList<>();
@@ -146,6 +150,7 @@ public class LubimyCzytacParser implements BookParser {
     }
 
     private Document fetchWithRetry(String url) {
+        IOException lastConnectivityError = null;
         for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
             try {
                 return Jsoup.connect(url)
@@ -158,17 +163,25 @@ public class LubimyCzytacParser implements BookParser {
                     log.error("Error connecting to LubimyCzytac", e);
                     return null;
                 } else {
+                    lastConnectivityError = e;
                     log.warn("Attempt {}/{} failed to connect to {}. Retrying...", attempt, MAX_RETRIES, url);
                     try {
-                        Thread.sleep(1000 * attempt);
+                        Thread.sleep(1000L * attempt);
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
+                        break;
                     }
                 }
             }
         }
 
         log.error("Error connecting to LubimyCzytac. All {} retry attempts failed", MAX_RETRIES);
+        if (lastConnectivityError != null) {
+            throw TransientProviderException.connectivity(
+                    MetadataProvider.Lubimyczytac,
+                    "LubimyCzytac network error: " + lastConnectivityError.getMessage(),
+                    lastConnectivityError);
+        }
         return null;
     }
 
@@ -448,15 +461,6 @@ public class LubimyCzytacParser implements BookParser {
     }
 
     private boolean isConnectivityError(Exception e) {
-        Throwable cause = e;
-        while (cause != null) {
-            if (e instanceof java.net.ConnectException ||
-                    e instanceof java.nio.channels.UnresolvedAddressException ||
-                    e instanceof java.net.SocketTimeoutException) {
-                return true;
-            }
-            cause = cause.getCause();
-        }
-        return false;
+        return NetworkErrorClassifier.isConnectivityError(e);
     }
 }

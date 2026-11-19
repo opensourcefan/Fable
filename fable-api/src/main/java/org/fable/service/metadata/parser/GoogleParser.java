@@ -8,6 +8,9 @@ import org.fable.model.dto.response.GoogleBooksApiResponse;
 import org.fable.model.dto.settings.MetadataProviderSettings;
 import org.fable.model.enums.MetadataProvider;
 import org.fable.service.appsettings.AppSettingService;
+import org.fable.service.network.NetworkErrorClassifier;
+import org.fable.service.network.OutboundHttpSupport;
+import org.fable.service.network.TransientProviderException;
 import org.fable.util.BookUtils;
 import org.jsoup.Jsoup;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -49,10 +52,6 @@ public class GoogleParser implements BookParser {
     private final AtomicLong lastRequestTime = new AtomicLong(0);
 
     @Autowired
-    public GoogleParser(ObjectMapper objectMapper, AppSettingService appSettingService) {
-        this(objectMapper, appSettingService, HttpClient.newHttpClient());
-    }
-
     public GoogleParser(ObjectMapper objectMapper, AppSettingService appSettingService, HttpClient httpClient) {
         this.objectMapper = objectMapper;
         this.appSettingService = appSettingService;
@@ -159,6 +158,7 @@ public class GoogleParser implements BookParser {
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(uri)
+                    .timeout(OutboundHttpSupport.DEFAULT_READ_TIMEOUT)
                     .GET()
                     .build();
 
@@ -167,6 +167,9 @@ public class GoogleParser implements BookParser {
             return handleApiResponse(response);
         } catch (IOException e) {
             log.error("IO error while fetching metadata from Google Books API: {}", e.getMessage());
+            if (NetworkErrorClassifier.isConnectivityError(e)) {
+                throw TransientProviderException.connectivity(MetadataProvider.Google, "Google Books API network error: " + e.getMessage(), e);
+            }
             return List.of();
         } catch (InterruptedException e) {
             log.error("Request to Google Books API was interrupted");
@@ -189,6 +192,11 @@ public class GoogleParser implements BookParser {
             return List.of();
         }
         
+        if (NetworkErrorClassifier.isTransientHttpStatus(statusCode)) {
+            log.error("Google Books API transient server error. Status: {}", statusCode);
+            throw TransientProviderException.upstreamStatus(MetadataProvider.Google, statusCode, "Google Books API HTTP " + statusCode, null);
+        }
+
         if (statusCode >= 500) {
             log.error("Google Books API server error. Status: {}", statusCode);
             return List.of();

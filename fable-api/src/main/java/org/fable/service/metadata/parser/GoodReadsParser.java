@@ -6,6 +6,9 @@ import org.fable.model.dto.BookReview;
 import org.fable.model.dto.request.FetchMetadataRequest;
 import org.fable.model.enums.MetadataProvider;
 import org.fable.service.appsettings.AppSettingService;
+import org.fable.service.network.NetworkErrorClassifier;
+import org.fable.service.network.OutboundHttpSupport;
+import org.fable.service.network.TransientProviderException;
 import org.fable.util.BookUtils;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -63,6 +66,8 @@ public class GoodReadsParser implements BookParser, DetailedMetadataProvider {
                     return metadata;
                 }
                 log.warn("GoodReads: Failed to parse details for existing ID: {}, falling back to search", existingGoodreadsId);
+            } catch (TransientProviderException e) {
+                throw e;
             } catch (Exception e) {
                 log.warn("GoodReads: Error fetching existing ID {}: {}, falling back to search", existingGoodreadsId, e.getMessage());
             }
@@ -81,6 +86,8 @@ public class GoodReadsParser implements BookParser, DetailedMetadataProvider {
                     }
                 }
                 log.info("GoodReads: ISBN lookup returned no results, falling back to title search");
+            } catch (TransientProviderException e) {
+                throw e;
             } catch (Exception e) {
                 log.warn("GoodReads: ISBN lookup failed: {}, falling back to title search", e.getMessage());
             }
@@ -171,6 +178,8 @@ public class GoodReadsParser implements BookParser, DetailedMetadataProvider {
         }
 
         return results;
+        } catch (TransientProviderException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Unhandled network or parsing error in GoodReadsParser: {}", e.getMessage(), e);
             return Collections.emptyList();
@@ -188,6 +197,8 @@ public class GoodReadsParser implements BookParser, DetailedMetadataProvider {
                     fetchedMetadata.add(detailedMetadata);
                 }
                 Thread.sleep(ThreadLocalRandom.current().nextLong(500, 1501));
+            } catch (TransientProviderException e) {
+                throw e;
             } catch (Exception e) {
                 log.error("Error fetching metadata for book: {}", preview.getGoodreadsId(), e);
             }
@@ -553,6 +564,8 @@ public class GoodReadsParser implements BookParser, DetailedMetadataProvider {
             Thread.sleep(Duration.ofSeconds(1));
             return metadataPreviews;
 
+        } catch (TransientProviderException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Error fetching metadata previews: {}", e.getMessage());
             return Collections.emptyList();
@@ -642,6 +655,7 @@ public class GoodReadsParser implements BookParser, DetailedMetadataProvider {
     private Document fetchDoc(String url) {
         try {
             Connection.Response response = Jsoup.connect(url)
+                    .timeout(OutboundHttpSupport.JSOUP_TIMEOUT_MS)
                     .header("accept", "text/html, application/json")
                     .header("accept-language", "en-US,en;q=0.9")
                     .header("content-type", "application/json")
@@ -670,6 +684,9 @@ public class GoodReadsParser implements BookParser, DetailedMetadataProvider {
             return response.parse();
         } catch (IOException e) {
             log.error("Error parsing url: {}", url, e);
+            if (NetworkErrorClassifier.isConnectivityError(e)) {
+                throw TransientProviderException.connectivity(MetadataProvider.GoodReads, "GoodReads network error: " + e.getMessage(), e);
+            }
             throw new RuntimeException(e);
         }
     }

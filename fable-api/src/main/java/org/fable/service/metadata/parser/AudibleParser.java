@@ -94,6 +94,8 @@ public class AudibleParser implements BookParser, DetailedMetadataProvider {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
+            } catch (org.fable.service.network.TransientProviderException e) {
+                throw e;
             } catch (Exception e) {
                 log.error("Error fetching metadata for Audible ID: {}", audibleIds.get(i), e);
             }
@@ -268,6 +270,8 @@ public class AudibleParser implements BookParser, DetailedMetadataProvider {
                 }
             }
 
+        } catch (org.fable.service.network.TransientProviderException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Failed to get Audible IDs: {}", e.getMessage(), e);
         }
@@ -286,6 +290,8 @@ public class AudibleParser implements BookParser, DetailedMetadataProvider {
             enforceRateLimit();
             Document doc = fetchDocument(url);
             return buildBookMetadataFromJsonLd(doc, audibleId);
+        } catch (org.fable.service.network.TransientProviderException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Failed to fetch Audible metadata for ID {}: {}", audibleId, e.getMessage());
             return null;
@@ -602,6 +608,12 @@ public class AudibleParser implements BookParser, DetailedMetadataProvider {
             throw new RuntimeException(e);
         } catch (IOException e) {
             log.error("Error fetching Audible URL: {}", url, e);
+            if (org.fable.service.network.NetworkErrorClassifier.isConnectivityError(e)) {
+                throw org.fable.service.network.TransientProviderException.connectivity(
+                        MetadataProvider.Audible,
+                        "Audible network error: " + e.getMessage(),
+                        e);
+            }
             throw new RuntimeException(e);
         }
     }

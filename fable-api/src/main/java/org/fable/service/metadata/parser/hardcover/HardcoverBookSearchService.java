@@ -1,6 +1,10 @@
 package org.fable.service.metadata.parser.hardcover;
 
+import org.fable.model.enums.MetadataProvider;
 import org.fable.service.appsettings.AppSettingService;
+import org.fable.service.network.NetworkErrorClassifier;
+import org.fable.service.network.OutboundHttpSupport;
+import org.fable.service.network.TransientProviderException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
@@ -31,6 +35,9 @@ public class HardcoverBookSearchService {
     public HardcoverBookSearchService(AppSettingService appSettingService) {
         this.appSettingService = appSettingService;
         this.restClient = RestClient.builder()
+                .requestFactory(OutboundHttpSupport.buildTimeoutRequestFactory(
+                        OutboundHttpSupport.CONNECT_TIMEOUT,
+                        OutboundHttpSupport.DEFAULT_READ_TIMEOUT))
                 .baseUrl("https://api.hardcover.app/v1/graphql")
                 .build();
     }
@@ -168,14 +175,23 @@ public class HardcoverBookSearchService {
 
         } catch (RestClientResponseException e) {
             successCount.set(0);
-            if (e.getStatusCode().value() == 429 || e.getResponseBodyAsString().contains("Throttled")) {
+            int statusCode = e.getStatusCode().value();
+            if (statusCode == 429 || e.getResponseBodyAsString().contains("Throttled")) {
                 increaseDelay();
                 log.warn("Hardcover API throttled, increased delay to {}ms", requestDelayMs.get());
-            } else {
-                log.error("Hardcover API error: {}", e.getMessage());
+                return null;
             }
+            if (NetworkErrorClassifier.isTransientHttpStatus(statusCode)) {
+                log.error("Hardcover API transient HTTP error ({}): {}", statusCode, e.getMessage());
+                throw TransientProviderException.upstreamStatus(MetadataProvider.Hardcover, statusCode, "Hardcover API HTTP " + statusCode, e);
+            }
+            log.error("Hardcover API error: {}", e.getMessage());
             return null;
         } catch (Exception e) {
+            if (NetworkErrorClassifier.isConnectivityError(e)) {
+                log.error("Hardcover API connectivity failure: {}", e.getMessage());
+                throw TransientProviderException.connectivity(MetadataProvider.Hardcover, "Hardcover API network error: " + e.getMessage(), e);
+            }
             log.error("Hardcover API request failed: {}", e.getMessage());
             return null;
         } finally {

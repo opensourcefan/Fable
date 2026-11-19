@@ -19,6 +19,9 @@ import org.fable.repository.MetadataFetchJobRepository;
 import org.fable.service.appsettings.AppSettingService;
 import org.fable.service.metadata.MetadataTaskContext;
 import org.fable.service.NotificationService;
+import org.fable.service.network.NetworkErrorClassifier;
+import org.fable.service.network.OutboundHttpSupport;
+import org.fable.service.network.TransientProviderException;
 import org.fable.task.TaskCancellationManager;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.UriComponentsBuilder;
@@ -79,7 +82,7 @@ public class ComicvineBookParser implements BookParser, DetailedMetadataProvider
     private final MetadataFetchJobRepository metadataFetchJobRepository;
     private final NotificationService notificationService;
     private final TaskCancellationManager cancellationManager;
-    private final HttpClient httpClient = HttpClient.newHttpClient();
+    private final HttpClient httpClient;
 
     private final AtomicBoolean rateLimited = new AtomicBoolean(false);
     private final AtomicLong rateLimitResetTime = new AtomicLong(0);
@@ -958,6 +961,7 @@ public class ComicvineBookParser implements BookParser, DetailedMetadataProvider
             log.debug("ComicVine API call #{} to {}", callNumber, endpoint);
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(uri)
+                    .timeout(OutboundHttpSupport.DEFAULT_READ_TIMEOUT)
                     .header("User-Agent", "Fable/1.0 (Book and Comic Metadata Fetcher; +https://github.com/fable-app/fable)")
                     .GET()
                     .build();
@@ -979,6 +983,13 @@ public class ComicvineBookParser implements BookParser, DetailedMetadataProvider
                          response.statusCode(), retriesLeft);
                 sleepWithCancellationChecks(2000);
                 return sendRequestWithRetry(uri, responseType, retriesLeft - 1);
+            } else if (NetworkErrorClassifier.isTransientHttpStatus(response.statusCode())) {
+                log.error("Comicvine API returned transient status code {} after retries", response.statusCode());
+                throw TransientProviderException.upstreamStatus(
+                        MetadataProvider.Comicvine,
+                        response.statusCode(),
+                        "ComicVine API HTTP " + response.statusCode(),
+                        null);
             } else {
                 log.error("Comicvine API returned status code {}. Body: {}", response.statusCode(), response.body());
             }
@@ -989,10 +1000,17 @@ public class ComicvineBookParser implements BookParser, DetailedMetadataProvider
                 return sendRequestWithRetry(uri, responseType, retriesLeft - 1);
             } else {
                 log.error("Error fetching data from Comicvine API after retries", e);
+                if (NetworkErrorClassifier.isConnectivityError(e)) {
+                    throw TransientProviderException.connectivity(
+                            MetadataProvider.Comicvine,
+                            "ComicVine API network error: " + e.getMessage(),
+                            e);
+                }
             }
         } catch (InterruptedException e) {
             log.error("Request interrupted", e);
             Thread.currentThread().interrupt();
+            throwIfTaskCancelled();
         }
         return null;
     }

@@ -176,6 +176,9 @@ public class SendEmailV2Service {
         mailProps.put("mail.smtp.connectiontimeout", connectionTimeout);
         mailProps.put("mail.smtp.timeout", socketTimeout);
         mailProps.put("mail.smtp.writetimeout", writeTimeout);
+        mailProps.put("mail.smtps.connectiontimeout", connectionTimeout);
+        mailProps.put("mail.smtps.timeout", socketTimeout);
+        mailProps.put("mail.smtps.writetimeout", writeTimeout);
     }
 
     private String generateEmailBody(String bookTitle) {

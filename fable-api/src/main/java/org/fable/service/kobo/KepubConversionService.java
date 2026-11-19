@@ -84,7 +84,10 @@ public class KepubConversionService {
             String downloadUrl = KEPUBIFY_GITHUB_BASE_URL + binaryName;
             log.info("Downloading kepubify binary '{}' from {}", binaryName, downloadUrl);
             Path tempPath = toolsDir.resolve(binaryName + ".tmp");
-            try (InputStream in = java.net.URI.create(downloadUrl).toURL().openStream()) {
+            try (InputStream in = org.fable.service.network.OutboundHttpSupport.openBoundedUrlStream(
+                    downloadUrl,
+                    org.fable.service.network.OutboundHttpSupport.CONNECT_TIMEOUT,
+                    org.fable.service.network.OutboundHttpSupport.BINARY_DOWNLOAD_READ_TIMEOUT)) {
                 Files.copy(in, tempPath, StandardCopyOption.REPLACE_EXISTING);
             }
             verifyBinaryIntegrity(tempPath, binaryName);

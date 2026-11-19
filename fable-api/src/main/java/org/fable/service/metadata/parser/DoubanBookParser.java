@@ -8,6 +8,8 @@ import org.fable.model.dto.BookReview;
 import org.fable.model.dto.request.FetchMetadataRequest;
 import org.fable.model.enums.MetadataProvider;
 import org.fable.service.appsettings.AppSettingService;
+import org.fable.service.network.NetworkErrorClassifier;
+import org.fable.service.network.TransientProviderException;
 import org.fable.util.BookUtils;
 import org.jsoup.Connection;
 import org.jsoup.Jsoup;
@@ -239,6 +241,8 @@ public class DoubanBookParser implements BookParser {
                 }
             }
 
+        } catch (TransientProviderException e) {
+            throw e;
         } catch (Exception e) {
             log.warn("Failed to get Douban search results: {}", e.getMessage(), e);
         }
@@ -713,6 +717,9 @@ public class DoubanBookParser implements BookParser {
             return Jsoup.parse(html, response.url().toString());
         } catch (IOException e) {
             log.error("Error parsing url: {}", url, e);
+            if (NetworkErrorClassifier.isConnectivityError(e)) {
+                throw TransientProviderException.connectivity(MetadataProvider.Douban, "Douban network error: " + e.getMessage(), e);
+            }
             throw new RuntimeException(e);
         }
     }

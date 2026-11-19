@@ -3,6 +3,7 @@ package org.fable.service;
 import lombok.extern.slf4j.Slf4j;
 import org.fable.model.dto.ReleaseNote;
 import org.fable.model.dto.VersionInfo;
+import org.fable.service.network.OutboundHttpSupport;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
@@ -33,6 +34,9 @@ public class VersionService {
     private static final int MAX_RELEASES = 15;
     private static final Pattern VERSION_TAG_PATTERN = Pattern.compile("^[vV]?(\\d+)\\.(\\d+)\\.(\\d+)(?:-([0-9A-Za-z.-]+))?(?:\\+([0-9A-Za-z.-]+))?$");
     private static final RestClient REST_CLIENT = RestClient.builder()
+            .requestFactory(OutboundHttpSupport.buildTimeoutRequestFactory(
+                    OutboundHttpSupport.VERSION_CONNECT_TIMEOUT,
+                    OutboundHttpSupport.VERSION_READ_TIMEOUT))
             .defaultHeader("Accept", "application/vnd.github+json")
             .defaultHeader("User-Agent", "Fable-Version-Checker")
             .build();

@@ -72,6 +72,7 @@ public class KoboServerProxy {
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(30))
                     .GET()
                     .build();
 

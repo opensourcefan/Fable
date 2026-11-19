@@ -83,7 +83,6 @@ public class BookdropMetadataService {
         return bookdropFileRepository.save(entity);
     }
 
-    @Transactional
     public BookdropFileEntity attachFetchedMetadata(Long bookdropFileId) throws JacksonException {
         BookdropFileEntity entity = getOrThrow(bookdropFileId);
 
@@ -109,6 +108,7 @@ public class BookdropMetadataService {
             try {
                 Thread.sleep(ThreadLocalRandom.current().nextLong(250, 1250));
             } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
                 throw new RuntimeException(e);
             }
         }
@@ -127,11 +127,16 @@ public class BookdropMetadataService {
             Map<MetadataProvider, BookMetadata> metadataMap = metadataRefreshService.fetchMetadataForBook(providers, book);
             fetchedMetadata = metadataRefreshService.buildFetchMetadata(initial, book.getId(), refreshOptions, metadataMap);
         }
+        BookdropFileEntity latestEntity = bookdropFileRepository.findById(bookdropFileId).orElse(null);
+        if (latestEntity == null || latestEntity.getStatus() != PENDING_REVIEW) {
+            log.info("Bookdrop file {} was finalized or removed during online fetch; skipping metadata write.", bookdropFileId);
+            return latestEntity != null ? latestEntity : entity;
+        }
         if (fetchedMetadata == null) {
-            log.info("No online metadata found for bookdrop file '{}'", entity.getFileName());
-            entity.setStatus(PENDING_REVIEW);
-            entity.setUpdatedAt(Instant.now());
-            return bookdropFileRepository.save(entity);
+            log.info("No online metadata found for bookdrop file '{}'", latestEntity.getFileName());
+            latestEntity.setStatus(PENDING_REVIEW);
+            latestEntity.setUpdatedAt(Instant.now());
+            return bookdropFileRepository.save(latestEntity);
         }
         if (Boolean.TRUE.equals(initial.getIsbnVerified())) {
             fetchedMetadata.setIsbnVerified(Boolean.TRUE);
@@ -144,11 +149,11 @@ public class BookdropMetadataService {
         }
         String fetchedJson = objectMapper.writeValueAsString(fetchedMetadata);
 
-        entity.setFetchedMetadata(fetchedJson);
-        entity.setStatus(PENDING_REVIEW);
-        entity.setUpdatedAt(Instant.now());
+        latestEntity.setFetchedMetadata(fetchedJson);
+        latestEntity.setStatus(PENDING_REVIEW);
+        latestEntity.setUpdatedAt(Instant.now());
 
-        return bookdropFileRepository.save(entity);
+        return bookdropFileRepository.save(latestEntity);
     }
 
     private boolean hasIsbn(BookMetadata metadata) {

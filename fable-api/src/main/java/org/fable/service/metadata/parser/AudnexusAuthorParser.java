@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.fable.model.dto.AuthorSearchResult;
 import org.fable.model.dto.response.audnexus.AudnexusAuthorResponse;
 import org.fable.model.enums.AuthorMetadataSource;
+import org.fable.service.network.OutboundHttpSupport;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.UriComponentsBuilder;
 import tools.jackson.databind.ObjectMapper;
@@ -46,6 +47,7 @@ public class AudnexusAuthorParser implements AuthorParser {
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(uri)
+                    .timeout(OutboundHttpSupport.DEFAULT_READ_TIMEOUT)
                     .GET()
                     .build();
 
@@ -94,6 +96,7 @@ public class AudnexusAuthorParser implements AuthorParser {
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(uri)
+                    .timeout(OutboundHttpSupport.DEFAULT_READ_TIMEOUT)
                     .GET()
                     .build();
 
@@ -130,6 +133,7 @@ public class AudnexusAuthorParser implements AuthorParser {
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(uri)
+                    .timeout(OutboundHttpSupport.DEFAULT_READ_TIMEOUT)
                     .GET()
                     .build();
 

@@ -5,18 +5,19 @@ import org.fable.model.entity.BookEntity;
 import org.fable.model.entity.BookMetadataEntity;
 import org.fable.repository.BookRepository;
 import org.fable.service.metadata.parser.hardcover.GraphQLRequest;
+import org.fable.service.network.OutboundHttpSupport;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -45,6 +46,9 @@ public class HardcoverSyncService {
         this.hardcoverSyncSettingsService = hardcoverSyncSettingsService;
         this.bookRepository = bookRepository;
         this.restClient = RestClient.builder()
+                .requestFactory(OutboundHttpSupport.buildTimeoutRequestFactory(
+                        OutboundHttpSupport.CONNECT_TIMEOUT,
+                        OutboundHttpSupport.DEFAULT_READ_TIMEOUT))
                 .baseUrl(HARDCOVER_API_URL)
                 .build();
     }
@@ -59,7 +63,6 @@ public class HardcoverSyncService {
      * @param userId The user ID whose reading progress is being synced
      */
     @Async
-    @Transactional(readOnly = true)
     public void syncProgressToHardcover(Long bookId, Float progressPercent, Long userId) {
         try {
             // Get user's Hardcover settings
@@ -79,8 +82,9 @@ public class HardcoverSyncService {
                     return;
                 }
 
-                // Fetch book fresh within the async context to avoid lazy loading issues
-                BookEntity book = bookRepository.findById(bookId).orElse(null);
+                // Fetch book eagerly with metadata in a single short query (no open DB TX across HTTP calls)
+                List<BookEntity> loaded = bookRepository.findAllWithMetadataByIds(Collections.singleton(bookId));
+                BookEntity book = (loaded != null && !loaded.isEmpty()) ? loaded.getFirst() : null;
                 if (book == null) {
                     log.debug("Hardcover sync skipped: book {} not found", bookId);
                     return;

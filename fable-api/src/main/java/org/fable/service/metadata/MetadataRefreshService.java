@@ -30,6 +30,7 @@ import org.fable.repository.MetadataFetchJobRepository;
 import org.fable.service.NotificationService;
 import org.fable.service.appsettings.AppSettingService;
 import org.fable.service.metadata.parser.BookParser;
+import org.fable.service.network.TransientProviderException;
 import org.fable.task.TaskStatus;
 import org.fable.task.TaskCancellationManager;
 import org.springframework.stereotype.Service;
@@ -66,6 +67,19 @@ public class MetadataRefreshService {
             List<MetadataProvider> providers,
             boolean reviewMode
     ) {}
+
+    record BookFetchOutcome(
+            Map<MetadataProvider, BookMetadata> metadataMap,
+            Map<MetadataProvider, TransientProviderException> transientFailures
+    ) {
+        boolean hasOnlyTransientFailures() {
+            return metadataMap.isEmpty() && !transientFailures.isEmpty();
+        }
+
+        TransientProviderException firstTransientFailure() {
+            return transientFailures.values().iterator().next();
+        }
+    }
 
     private final LibraryRepository libraryRepository;
     private final MetadataFetchJobRepository metadataFetchJobRepository;
@@ -156,17 +170,21 @@ public class MetadataRefreshService {
                     }
 
                     MetadataTaskContext.set(jobId, finalCompletedCount, totalBooks, plan.reviewMode());
-                    Map<MetadataProvider, BookMetadata> metadataMap = fetchMetadataForBook(
+                    BookFetchOutcome fetchOutcome = fetchMetadataOutcomeForBook(
                             plan.providers(),
                             plan.book(),
                             plan.refreshOptions(),
                             finalIssueSequenceIndex);
+                    if (fetchOutcome.hasOnlyTransientFailures()) {
+                        throw fetchOutcome.firstTransientFailure();
+                    }
+                    Map<MetadataProvider, BookMetadata> metadataMap = fetchOutcome.metadataMap();
                     if (plan.providers().contains(GoodReads)) {
                         delayGoodreadsRequest();
                     }
 
                     BookMetadata fetched = buildFetchMetadata(plan.book().getMetadata(), bookId, plan.refreshOptions(), metadataMap);
-                    applyFetchedMetadata(txTemplate, bookId, task, jobId, finalCompletedCount, totalBooks, plan, fetched);
+                    applyFetchedMetadata(txTemplate, bookId, task, jobId, finalCompletedCount, totalBooks, plan, fetched, metadataMap.isEmpty());
                 } catch (CancellationException e) {
                     cancelTask(task);
                     cancellationManager.clearCancellation(jobId);
@@ -296,7 +314,8 @@ public class MetadataRefreshService {
             int completedCount,
             int totalBooks,
             MetadataRefreshPlan plan,
-            BookMetadata fetched
+            BookMetadata fetched,
+            boolean noProviderReturnedData
     ) {
         txTemplate.executeWithoutResult(status -> {
             BookEntity book = loadBookForRefresh(bookId);
@@ -309,12 +328,20 @@ public class MetadataRefreshService {
             }
 
             if (plan.reviewMode()) {
-                saveProposal(task, book.getId(), fetched);
+                if (!noProviderReturnedData) {
+                    saveProposal(task, book.getId(), fetched);
+                } else {
+                    log.info("No metadata returned by providers for book {}; skipping blank review proposal.", getBookIdentifier(book));
+                }
             } else {
                 MetadataReplaceMode replaceMode = plan.refreshOptions().getReplaceMode() != null
                         ? plan.refreshOptions().getReplaceMode()
                         : MetadataReplaceMode.REPLACE_MISSING;
-                updateBookMetadata(book, fetched, plan.refreshOptions().isRefreshCovers(), plan.refreshOptions().isMergeCategories(), replaceMode);
+                if (noProviderReturnedData && replaceMode == MetadataReplaceMode.REPLACE_ALL) {
+                    log.warn("No metadata returned by any provider for book {} in REPLACE_ALL mode; refusing to wipe existing metadata.", getBookIdentifier(book));
+                } else {
+                    updateBookMetadata(book, fetched, plan.refreshOptions().isRefreshCovers(), plan.refreshOptions().isMergeCategories(), replaceMode);
+                }
             }
 
             book.setLastMetadataFetchAt(Instant.now());
@@ -387,15 +414,36 @@ public class MetadataRefreshService {
             MetadataRefreshOptions refreshOptions,
             int sequenceIndex
     ) {
+        BookFetchOutcome outcome = fetchMetadataOutcomeForBook(providers, book, refreshOptions, sequenceIndex);
+        if (outcome.hasOnlyTransientFailures()) {
+            throw outcome.firstTransientFailure();
+        }
+        return outcome.metadataMap();
+    }
+
+    BookFetchOutcome fetchMetadataOutcomeForBook(
+            List<MetadataProvider> providers,
+            Book book,
+            MetadataRefreshOptions refreshOptions,
+            int sequenceIndex
+    ) {
         FetchMetadataRequest request = buildFetchMetadataRequestFromBook(book, refreshOptions, sequenceIndex);
-        return providers.stream()
-            .map(provider -> fetchMetadataFromProvider(provider, book, request))
-                .filter(Objects::nonNull)
-                .collect(Collectors.toMap(
-                        BookMetadata::getProvider,
-                        metadata -> metadata,
-                        (existing, replacement) -> existing
-                ));
+        Map<MetadataProvider, BookMetadata> metadataMap = new LinkedHashMap<>();
+        Map<MetadataProvider, TransientProviderException> transientFailures = new LinkedHashMap<>();
+
+        for (MetadataProvider provider : providers) {
+            try {
+                BookMetadata metadata = fetchMetadataFromProvider(provider, book, request);
+                if (metadata != null && metadata.getProvider() != null) {
+                    metadataMap.putIfAbsent(metadata.getProvider(), metadata);
+                }
+            } catch (TransientProviderException e) {
+                log.warn("Metadata provider {} encountered transient failure for book {}: {}",
+                        provider, getBookIdentifier(book), e.getMessage());
+                transientFailures.put(provider, e);
+            }
+        }
+        return new BookFetchOutcome(metadataMap, transientFailures);
     }
 
     public Map<MetadataProvider, BookMetadata> fetchMetadataForBook(List<MetadataProvider> providers, BookEntity bookEntity) {
@@ -665,7 +713,7 @@ public class MetadataRefreshService {
             }
 
             log.debug("Metadata provider {} returned no top match for book {}. Falling back to full result scan.", provider, getBookIdentifier(book));
-        } catch (CancellationException e) {
+        } catch (CancellationException | TransientProviderException e) {
             throw e;
         } catch (Exception e) {
             log.warn("Metadata provider {} top-match fetch failed for book {}. Falling back to full result scan. Cause: {}",
@@ -678,7 +726,7 @@ public class MetadataRefreshService {
                 return null;
             }
             return metadataList.getFirst();
-        } catch (CancellationException e) {
+        } catch (CancellationException | TransientProviderException e) {
             throw e;
         } catch (Exception e) {
             log.warn("Metadata provider {} full result scan failed for book {}. Skipping provider. Cause: {}",

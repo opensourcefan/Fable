@@ -515,8 +515,17 @@ public class EpubMetadataWriter implements MetadataWriter {
     }
 
     private byte[] loadImage(String pathOrUrl) {
-        try (InputStream stream = pathOrUrl.startsWith("http") ? URI.create(pathOrUrl).toURL().openStream() : new FileInputStream(pathOrUrl)) {
-            return stream.readAllBytes();
+        try {
+            if (pathOrUrl.startsWith("http")) {
+                return org.fable.service.network.OutboundHttpSupport.downloadBytes(
+                        pathOrUrl,
+                        org.fable.service.network.OutboundHttpSupport.CONNECT_TIMEOUT,
+                        org.fable.service.network.OutboundHttpSupport.DOWNLOAD_READ_TIMEOUT,
+                        org.fable.service.network.OutboundHttpSupport.DEFAULT_COVER_MAX_BYTES);
+            }
+            try (InputStream stream = new FileInputStream(pathOrUrl)) {
+                return stream.readAllBytes();
+            }
         } catch (IOException e) {
             log.warn("Failed to load image from {}: {}", pathOrUrl, e.getMessage());
             return null;

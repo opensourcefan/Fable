@@ -172,6 +172,7 @@ public class DuckDuckGoCoverService implements BookCoverProvider {
                     + "&vqd=" + searchToken;
 
             Connection.Response resp = Jsoup.connect(url)
+                    .timeout(org.fable.service.network.OutboundHttpSupport.JSOUP_TIMEOUT_MS)
                     .ignoreContentType(true)
                     .referrer(referrerUrl)
                     .followRedirects(true)
@@ -207,6 +208,7 @@ public class DuckDuckGoCoverService implements BookCoverProvider {
     private Connection.Response getResponse(String url) {
         try {
             return Jsoup.connect(url)
+                    .timeout(org.fable.service.network.OutboundHttpSupport.JSOUP_TIMEOUT_MS)
                     .referrer(REFERRER)
                     .followRedirects(true)
                     .headers(HTML_HEADERS)

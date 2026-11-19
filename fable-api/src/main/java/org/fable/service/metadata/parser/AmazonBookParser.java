@@ -6,6 +6,9 @@ import org.fable.model.dto.BookReview;
 import org.fable.model.dto.request.FetchMetadataRequest;
 import org.fable.model.enums.MetadataProvider;
 import org.fable.service.appsettings.AppSettingService;
+import org.fable.service.network.NetworkErrorClassifier;
+import org.fable.service.network.OutboundHttpSupport;
+import org.fable.service.network.TransientProviderException;
 import org.fable.util.BookUtils;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -120,11 +123,15 @@ public class AmazonBookParser implements BookParser, DetailedMetadataProvider {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
+            } catch (TransientProviderException e) {
+                throw e;
             } catch (Exception e) {
                 log.error("Error fetching metadata for ASIN: {}", amazonBookIds.get(i), e);
             }
         }
         return results;
+        } catch (TransientProviderException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Unhandled network or parsing error in AmazonBookParser: {}", e.getMessage(), e);
             return Collections.emptyList();
@@ -266,6 +273,8 @@ public class AmazonBookParser implements BookParser, DetailedMetadataProvider {
         } catch (AmazonAntiScrapingException e) {
             log.debug("Aborting Amazon search due to anti-scraping (503).");
             return Collections.emptyList();
+        } catch (TransientProviderException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Failed to get asin: {}", e.getMessage(), e);
         }
@@ -885,6 +894,7 @@ public class AmazonBookParser implements BookParser, DetailedMetadataProvider {
             LocaleInfo localeInfo = getLocaleInfoForDomain(domain);
 
             Connection connection = Jsoup.connect(url)
+                    .timeout(OutboundHttpSupport.JSOUP_TIMEOUT_MS)
                     .header("accept", "text/html, application/json")
                     .header("accept-language", localeInfo.acceptLanguage)
                     .header("content-type", "application/json")
@@ -929,6 +939,9 @@ public class AmazonBookParser implements BookParser, DetailedMetadataProvider {
             throw new RuntimeException(e);
         } catch (IOException e) {
             log.error("Error parsing url: {}", url, e);
+            if (NetworkErrorClassifier.isConnectivityError(e)) {
+                throw TransientProviderException.connectivity(MetadataProvider.Amazon, "Amazon network error: " + e.getMessage(), e);
+            }
             throw new RuntimeException(e);
         }
     }

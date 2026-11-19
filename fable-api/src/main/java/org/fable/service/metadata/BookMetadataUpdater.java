@@ -701,19 +701,41 @@ public class BookMetadataUpdater {
             return;
         }
         if (!set) return;
-        if (!StringUtils.hasText(m.getThumbnailUrl()) || isLocalOrPrivateUrl(m.getThumbnailUrl())) return;
-        try {
-            if (bookType == BookFileType.AUDIOBOOK) {
-                if (Boolean.TRUE.equals(e.getAudiobookCoverLocked())) return;
-                fileService.createAudiobookThumbnailFromUrl(bookId, m.getThumbnailUrl());
-                bookEntity.getMetadata().setAudiobookCoverUpdatedOn(Instant.now());
-            } else {
-                fileService.createThumbnailFromUrl(bookId, m.getThumbnailUrl());
-                bookEntity.getMetadata().setCoverUpdatedOn(Instant.now());
+        String thumbnailUrl = m.getThumbnailUrl();
+        if (!StringUtils.hasText(thumbnailUrl)) return;
+
+        int maxAttempts = 3;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                if (isLocalOrPrivateUrlStrict(thumbnailUrl)) {
+                    return;
+                }
+                if (bookType == BookFileType.AUDIOBOOK) {
+                    if (Boolean.TRUE.equals(e.getAudiobookCoverLocked())) return;
+                    fileService.createAudiobookThumbnailFromUrl(bookId, thumbnailUrl);
+                    bookEntity.getMetadata().setAudiobookCoverUpdatedOn(Instant.now());
+                } else {
+                    fileService.createThumbnailFromUrl(bookId, thumbnailUrl);
+                    bookEntity.getMetadata().setCoverUpdatedOn(Instant.now());
+                }
+                bookEntity.setBookCoverHash(BookCoverUtils.generateCoverHash());
+                return;
+            } catch (Exception ex) {
+                boolean retryable = attempt < maxAttempts && org.fable.service.network.NetworkErrorClassifier.isTransientFailure(ex);
+                if (retryable) {
+                    log.warn("Transient cover download error for book {} (attempt {}/{}): {}. Retrying...",
+                            bookId, attempt, maxAttempts, ex.getMessage());
+                    try {
+                        Thread.sleep(attempt == 1 ? 1000L : 2500L);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                } else {
+                    log.warn("Failed to download cover for book {}: {}", bookId, ex.getMessage());
+                    return;
+                }
             }
-            bookEntity.setBookCoverHash(BookCoverUtils.generateCoverHash());
-        } catch (Exception ex) {
-            log.warn("Failed to download cover for book {}: {}", bookId, ex.getMessage());
         }
     }
 
@@ -785,13 +807,25 @@ public class BookMetadataUpdater {
         }
     }
 
-    private boolean isLocalOrPrivateUrl(String url) {
+    private boolean isLocalOrPrivateUrlStrict(String url) throws java.net.UnknownHostException {
         try {
             URI uri = new URI(url);
             String host = uri.getHost();
+            if (host == null || host.isBlank()) return true;
             if ("localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host)) return true;
             InetAddress addr = InetAddress.getByName(host);
             return addr.isLoopbackAddress() || addr.isSiteLocalAddress();
+        } catch (java.net.UnknownHostException uhe) {
+            throw uhe;
+        } catch (Exception e) {
+            log.warn("Invalid thumbnail URL '{}': {}", url, e.getMessage());
+            return true;
+        }
+    }
+
+    private boolean isLocalOrPrivateUrl(String url) {
+        try {
+            return isLocalOrPrivateUrlStrict(url);
         } catch (Exception e) {
             log.warn("Invalid thumbnail URL '{}': {}", url, e.getMessage());
             return true;

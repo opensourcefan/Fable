@@ -45,7 +45,10 @@ public class FfprobeService {
         if (!Files.exists(binaryPath)) {
             String downloadUrl = FFPROBE_GITHUB_BASE_URL + binaryName;
             log.info("Downloading ffprobe binary '{}' from {}", binaryName, downloadUrl);
-            try (InputStream in = java.net.URI.create(downloadUrl).toURL().openStream()) {
+            try (InputStream in = org.fable.service.network.OutboundHttpSupport.openBoundedUrlStream(
+                    downloadUrl,
+                    org.fable.service.network.OutboundHttpSupport.CONNECT_TIMEOUT,
+                    org.fable.service.network.OutboundHttpSupport.BINARY_DOWNLOAD_READ_TIMEOUT)) {
                 Files.copy(in, binaryPath, StandardCopyOption.REPLACE_EXISTING);
             }
             if (!binaryPath.toFile().setExecutable(true)) {

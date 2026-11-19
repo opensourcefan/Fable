@@ -9,6 +9,9 @@ import org.fable.model.dto.response.ranobedbapi.RanobedbBookResponse;
 import org.fable.model.dto.response.ranobedbapi.RanobedbSearchResponse;
 import org.fable.model.enums.MetadataProvider;
 import org.fable.service.appsettings.AppSettingService;
+import org.fable.service.network.NetworkErrorClassifier;
+import org.fable.service.network.OutboundHttpSupport;
+import org.fable.service.network.TransientProviderException;
 import org.fable.util.BookUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.UriComponentsBuilder;
@@ -37,7 +40,7 @@ public class RanobeDbParser implements BookParser {
     private static final String RANOBEDB_IMAGE_URL = "https://images.ranobedb.org/";
 
     private final AppSettingService appSettingService;
-    private final HttpClient httpClient = HttpClient.newHttpClient();
+    private final HttpClient httpClient;
     
     // Rate limiter: 2 requests per second
     private static final int MAX_REQUESTS_PER_SECOND = 2;
@@ -132,6 +135,7 @@ public class RanobeDbParser implements BookParser {
 
           HttpRequest request = HttpRequest.newBuilder()
                   .uri(uri)
+                  .timeout(OutboundHttpSupport.DEFAULT_READ_TIMEOUT)
                   .header("User-Agent", "Fable/1.0 (Book and Comic Metadata Fetcher; +https://github.com/fable-app/fable)")
                   .GET()
                   .build();
@@ -142,11 +146,20 @@ public class RanobeDbParser implements BookParser {
               List<BookMetadata> metadataList = parseRanobeDbApiResponse(response.body(), fetchTop);
               log.error("Ranobedb: Found {} results for term: '{}'", metadataList.size(), term);
               return metadataList;
+          } else if (NetworkErrorClassifier.isTransientHttpStatus(response.statusCode())) {
+              log.error("Ranobedb Search API returned transient status code {}", response.statusCode());
+              throw TransientProviderException.upstreamStatus(MetadataProvider.Ranobedb, response.statusCode(), "RanobeDB API HTTP " + response.statusCode(), null);
           } else {
               log.error("Ranobedb Search API returned status code {}", response.statusCode());
           }
-      } catch (IOException | InterruptedException e) {
+      } catch (IOException e) {
           log.error("Error fetching metadata from Ranobedb Search API", e);
+          if (NetworkErrorClassifier.isConnectivityError(e)) {
+              throw TransientProviderException.connectivity(MetadataProvider.Ranobedb, "RanobeDB API network error: " + e.getMessage(), e);
+          }
+      } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          log.error("Interrupted while fetching metadata from Ranobedb Search API", e);
       }
       return Collections.emptyList();
     }
@@ -189,6 +202,7 @@ public class RanobeDbParser implements BookParser {
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(uri)
+                    .timeout(OutboundHttpSupport.DEFAULT_READ_TIMEOUT)
                     .header("User-Agent", "Fable/1.0 (Book and Comic Metadata Fetcher; +https://github.com/fable-app/fable)")
                     .GET()
                     .build();
@@ -265,11 +279,20 @@ public class RanobeDbParser implements BookParser {
                     .seriesTotal(seriesBooks.isEmpty() ? null : seriesBooks.size())
                     .publishedDate(englishRelease != null ? parseDate(englishRelease.getReleaseDate()) : parseDate(book.getCReleaseDate()))
                     .build();
+            } else if (NetworkErrorClassifier.isTransientHttpStatus(response.statusCode())) {
+                log.error("Ranobedb Get Book API returned transient status code {}", response.statusCode());
+                throw TransientProviderException.upstreamStatus(MetadataProvider.Ranobedb, response.statusCode(), "RanobeDB Get Book API HTTP " + response.statusCode(), null);
             } else {
                 log.error("Ranobedb Get Book API returned status code {}", response.statusCode());
             }
-        } catch (IOException | InterruptedException e) {
-            log.error("Error fetching metadata from Ranobedb Search API", e);
+        } catch (IOException e) {
+            log.error("Error fetching metadata from Ranobedb Get Book API", e);
+            if (NetworkErrorClassifier.isConnectivityError(e)) {
+                throw TransientProviderException.connectivity(MetadataProvider.Ranobedb, "RanobeDB Get Book API network error: " + e.getMessage(), e);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.error("Interrupted while fetching metadata from Ranobedb Get Book API", e);
         }
         
         return null;

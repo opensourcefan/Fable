@@ -71,6 +71,7 @@ public class AmazonBookParserTest {
 
         Connection.Response mockResponse = mock(Connection.Response.class);
 
+        when(mockConnection.timeout(anyInt())).thenReturn(mockConnection);
         when(mockConnection.header(any(String.class), any(String.class))).thenReturn(mockConnection);
         when(mockConnection.method(any(Connection.Method.class))).thenReturn(mockConnection);
         when(mockConnection.execute()).thenReturn(mockResponse);
