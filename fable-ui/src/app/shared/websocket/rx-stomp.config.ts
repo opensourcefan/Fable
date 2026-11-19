@@ -1,15 +1,20 @@
-import {RxStompConfig} from '@stomp/rx-stomp';
+import {ReconnectionTimeMode, RxStompConfig} from '@stomp/rx-stomp';
 import {AuthService} from '../service/auth.service';
 import {API_CONFIG} from '../../core/config/api-config';
 
 export function createRxStompConfig(authService: AuthService): RxStompConfig {
   return {
     brokerURL: API_CONFIG.BROKER_URL,
-    heartbeatIncoming: 0,
+    heartbeatIncoming: 10000,
+    heartbeatToleranceMultiplier: 2.5,
     heartbeatOutgoing: 20000,
-    reconnectDelay: 10000,
-    beforeConnect: (stomp) => {
-      const token = authService.getInternalAccessToken();
+    reconnectDelay: 2000,
+    maxReconnectDelay: 30000,
+    reconnectTimeMode: ReconnectionTimeMode.EXPONENTIAL,
+    beforeConnect: async (stomp) => {
+      const token = typeof authService.ensureFreshAccessToken === 'function'
+        ? await authService.ensureFreshAccessToken()
+        : authService.getInternalAccessToken();
       if (token) {
         stomp.stompClient.connectHeaders = {
           'Authorization': `Bearer ${token}`,

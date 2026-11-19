@@ -4,6 +4,7 @@ import {catchError, filter, switchMap, take} from 'rxjs/operators';
 import {Observable, throwError, timer} from 'rxjs';
 import {AuthService} from '../../shared/service/auth.service';
 import {API_CONFIG} from '../config/api-config';
+import {isTransientNetworkError} from '../util/network-error.util';
 
 const AUTH_URL_PREFIX = `${API_CONFIG.BASE_URL}/api/v1/auth/`;
 
@@ -61,9 +62,13 @@ function handle401Error(authService: AuthService, request: HttpRequest<unknown>,
       catchError(err => {
         authService.isRefreshing = false;
         authService.refreshTokenSubject.next(null);
-        // Soft session end — do NOT call logout() (that posts with a dead refresh token,
-        // re-enters this interceptor, and for OIDC can hard-navigate to a broken end_session URL).
-        authService.forceLogout('session_expired');
+        // Preserve tokens during confirmed transient network/gateway outages so users
+        // are not forcibly logged out mid-outage; fail closed on 401/403 or other errors.
+        if (!isTransientNetworkError(err)) {
+          // Soft session end — do NOT call logout() (that posts with a dead refresh token,
+          // re-enters this interceptor, and for OIDC can hard-navigate to a broken end_session URL).
+          authService.forceLogout('session_expired');
+        }
         return throwError(() => err);
       })
     );

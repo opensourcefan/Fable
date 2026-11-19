@@ -1,12 +1,14 @@
 import {inject, Injectable, Injector, OnDestroy} from '@angular/core';
 import {HttpClient} from '@angular/common/http';
-import {BehaviorSubject, Observable, tap} from 'rxjs';
+import {BehaviorSubject, firstValueFrom, Observable, tap, timer} from 'rxjs';
+import {filter, take} from 'rxjs/operators';
 import {RxStompService} from '../websocket/rx-stomp.service';
 import {API_CONFIG} from '../../core/config/api-config';
 import {createRxStompConfig} from '../websocket/rx-stomp.config';
 import {Router} from '@angular/router';
 import {PostLoginInitializerService} from '../../core/services/post-login-initializer.service';
 import {AuthTokenResponse} from '../model/auth-token-response.model';
+import {isTransientNetworkError} from '../../core/util/network-error.util';
 
 const ACCESS_TOKEN_STORAGE_KEY = 'accessToken_Internal';
 const REFRESH_TOKEN_STORAGE_KEY = 'refreshToken_Internal';
@@ -15,6 +17,7 @@ const DEFAULT_PASSWORD_STORAGE_KEY = 'isDefaultPassword_Internal';
 
 /** Refresh the access token this many milliseconds before it expires. */
 const PROACTIVE_REFRESH_LEAD_MS = 5 * 60 * 1000; // 5 minutes
+const PROACTIVE_REFRESH_RETRY_DELAY_MS = 30 * 1000; // 30 seconds on transient network failure
 
 @Injectable({
   providedIn: 'root',
@@ -207,6 +210,67 @@ export class AuthService implements OnDestroy {
   }
 
   /**
+   * Ensures a fresh access token is available before opening or reconnecting a WebSocket.
+   * Shares the single-flight refresh lock with AuthInterceptorService and AuthGuard.
+   */
+  async ensureFreshAccessToken(): Promise<string | null> {
+    if (this.hasValidInternalAccessToken()) {
+      return this.getInternalAccessToken();
+    }
+
+    const refreshToken = this.getInternalRefreshToken();
+    if (!refreshToken) {
+      return this.getInternalAccessToken();
+    }
+
+    if (this.isRefreshing) {
+      await firstValueFrom(
+        timer(0, 50).pipe(
+          filter(() => !this.isRefreshing),
+          take(1)
+        )
+      );
+      return this.getInternalAccessToken();
+    }
+
+    this.isRefreshing = true;
+    this.refreshTokenSubject.next(null);
+    try {
+      const response = await firstValueFrom(this.internalRefreshToken());
+      this.isRefreshing = false;
+      if (response.accessToken) {
+        this.refreshTokenSubject.next(response.accessToken);
+        return response.accessToken;
+      }
+      return this.getInternalAccessToken();
+    } catch (err) {
+      this.isRefreshing = false;
+      this.refreshTokenSubject.next(null);
+      if (isTransientNetworkError(err)) {
+        console.warn('AuthService: Token refresh deferred during transient outage; preserving session.');
+        return this.getInternalAccessToken();
+      }
+      this.forceLogout('session_expired');
+      return null;
+    }
+  }
+
+  /**
+   * Called after connectivity or tab visibility resumes to retry any proactive
+   * token refresh that was deferred while offline.
+   */
+  retryProactiveRefreshIfNeeded(): void {
+    const refreshToken = this.getInternalRefreshToken();
+    if (!refreshToken || this.isRefreshing) {
+      return;
+    }
+    const expires = this.getInternalAccessTokenExpiry();
+    if (expires === null || expires - Date.now() <= PROACTIVE_REFRESH_LEAD_MS) {
+      this.executeProactiveRefresh();
+    }
+  }
+
+  /**
    * Schedules a proactive token refresh ~5 minutes before the access token expires.
    * This prevents the token from expiring while the tab is suspended (common on mobile).
    */
@@ -221,29 +285,39 @@ export class AuthService implements OnDestroy {
     const effectiveDelay = Math.max(0, delayMs);
 
     this.proactiveRefreshTimerId = setTimeout(() => {
-      const refreshToken = this.getInternalRefreshToken();
-      if (!refreshToken) return;
-      // Share the interceptor's refresh lock so a tab-wake proactive refresh and a
-      // concurrent 401 retry cannot rotate the same refresh token twice.
-      if (this.isRefreshing) return;
-
-      this.isRefreshing = true;
-      this.refreshTokenSubject.next(null);
-      this.internalRefreshToken().subscribe({
-        next: (response) => {
-          this.isRefreshing = false;
-          if (response.accessToken) {
-            this.refreshTokenSubject.next(response.accessToken);
-          }
-          // saveInternalTokens (called inside internalRefreshToken's tap)
-          // will re-schedule the next proactive refresh automatically.
-        },
-        error: (err) => {
-          this.isRefreshing = false;
-          console.warn('AuthService: Proactive token refresh failed:', err);
-        }
-      });
+      this.executeProactiveRefresh();
     }, effectiveDelay);
+  }
+
+  private executeProactiveRefresh(): void {
+    const refreshToken = this.getInternalRefreshToken();
+    if (!refreshToken) return;
+    // Share the interceptor's refresh lock so a tab-wake proactive refresh and a
+    // concurrent 401 retry cannot rotate the same refresh token twice.
+    if (this.isRefreshing) return;
+
+    this.isRefreshing = true;
+    this.refreshTokenSubject.next(null);
+    this.internalRefreshToken().subscribe({
+      next: (response) => {
+        this.isRefreshing = false;
+        if (response.accessToken) {
+          this.refreshTokenSubject.next(response.accessToken);
+        }
+        // saveInternalTokens (called inside internalRefreshToken's tap)
+        // will re-schedule the next proactive refresh automatically.
+      },
+      error: (err) => {
+        this.isRefreshing = false;
+        console.warn('AuthService: Proactive token refresh failed:', err);
+        if (isTransientNetworkError(err) && this.getInternalRefreshToken()) {
+          this.cancelProactiveRefresh();
+          this.proactiveRefreshTimerId = setTimeout(() => {
+            this.executeProactiveRefresh();
+          }, PROACTIVE_REFRESH_RETRY_DELAY_MS);
+        }
+      }
+    });
   }
 
   /** Cancels any pending proactive refresh timer. */

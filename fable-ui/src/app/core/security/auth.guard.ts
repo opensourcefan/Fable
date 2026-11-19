@@ -2,6 +2,7 @@ import {inject} from '@angular/core';
 import {CanActivateFn, Router, UrlTree} from '@angular/router';
 import {catchError, filter, map, Observable, of, take, timer} from 'rxjs';
 import {AuthService} from '../../shared/service/auth.service';
+import {isTransientNetworkError} from '../util/network-error.util';
 
 export const AuthGuard: CanActivateFn = (_route, _state) => {
   const router = inject(Router);
@@ -43,9 +44,12 @@ export const AuthGuard: CanActivateFn = (_route, _state) => {
         }
         return postRefreshDestination(authService, router);
       }),
-      catchError(() => {
+      catchError((err) => {
         authService.isRefreshing = false;
         authService.refreshTokenSubject.next(null);
+        if (isTransientNetworkError(err)) {
+          return of(false);
+        }
         authService.clearSessionOnLoginPage();
         return of(router.createUrlTree(['/login'], {queryParams: {reason: 'session_expired'}}));
       })
@@ -65,6 +69,9 @@ function waitForInFlightRefresh(authService: AuthService, router: Router): Obser
     take(1),
     map(() => {
       if (!authService.hasValidInternalAccessToken()) {
+        if (authService.getInternalRefreshToken()) {
+          return false;
+        }
         authService.clearSessionOnLoginPage();
         return router.createUrlTree(['/login'], {queryParams: {reason: 'session_expired'}});
       }

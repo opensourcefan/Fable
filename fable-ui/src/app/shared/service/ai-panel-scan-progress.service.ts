@@ -7,24 +7,40 @@ import {AiPanelScanProgressPayload} from '../model/ai-panel-scan-progress.model'
 import {RxStompService} from '../websocket/rx-stomp.service';
 import {RxStompState} from '@stomp/rx-stomp';
 
+const DISCONNECT_GRACE_MS = 30_000;
+
 @Injectable({providedIn: 'root'})
 export class AiPanelScanProgressService {
   private readonly messageService = inject(MessageService);
   private readonly rxStompService = inject(RxStompService);
   private readonly progressSubject = new BehaviorSubject<AiPanelScanProgressPayload | null>(null);
   private clearTimer: ReturnType<typeof setTimeout> | undefined;
+  private disconnectClearTimer: ReturnType<typeof setTimeout> | undefined;
 
   readonly progress$ = this.progressSubject.asObservable();
 
   constructor() {
     this.rxStompService?.connectionState$?.subscribe(state => {
-      if (state !== RxStompState.OPEN) {
-        this.progressSubject.next(null);
+      if (state === RxStompState.OPEN) {
+        this.cancelDisconnectClearTimer();
+      } else if (this.progressSubject.value && !this.disconnectClearTimer) {
+        this.disconnectClearTimer = setTimeout(() => {
+          this.disconnectClearTimer = undefined;
+          this.progressSubject.next(null);
+        }, DISCONNECT_GRACE_MS);
       }
     });
   }
 
+  private cancelDisconnectClearTimer(): void {
+    if (this.disconnectClearTimer) {
+      clearTimeout(this.disconnectClearTimer);
+      this.disconnectClearTimer = undefined;
+    }
+  }
+
   handleIncomingProgress(progress: AiPanelScanProgressPayload): void {
+    this.cancelDisconnectClearTimer();
     if (this.clearTimer) {
       clearTimeout(this.clearTimer);
       this.clearTimer = undefined;

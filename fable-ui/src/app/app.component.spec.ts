@@ -109,7 +109,11 @@ describe('AppComponent offline detection', () => {
     window.dispatchEvent(new Event('offline'));
 
     await vi.waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith('/api/public/settings', {method: 'HEAD', cache: 'no-store'});
+      expect(fetchSpy).toHaveBeenCalledWith('/api/public/settings', {
+        method: 'HEAD',
+        cache: 'no-store',
+        signal: expect.any(AbortSignal)
+      });
     });
   });
 

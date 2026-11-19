@@ -1,3 +1,4 @@
+import {HttpErrorResponse} from '@angular/common/http';
 import {TestBed} from '@angular/core/testing';
 import {Router} from '@angular/router';
 import {firstValueFrom, of, throwError} from 'rxjs';
@@ -118,5 +119,19 @@ describe('AuthGuard', () => {
       commands: ['/login'],
       extras: {queryParams: {reason: 'session_expired'}}
     });
+  });
+
+  it('preserves session and blocks navigation without logging out on transient network refresh error', async () => {
+    authServiceMock.getInternalAccessToken.mockReturnValue('expired-access');
+    authServiceMock.getInternalAccessTokenExpiry.mockReturnValue(Date.now() - 1_000);
+    authServiceMock.getInternalDefaultPassword.mockReturnValue(false);
+    authServiceMock.getInternalRefreshToken.mockReturnValue('refresh-token');
+    authServiceMock.internalRefreshToken.mockReturnValue(throwError(() => new HttpErrorResponse({status: 0})));
+
+    const result = TestBed.runInInjectionContext(() => AuthGuard({} as never, {} as never));
+    const resolved = await firstValueFrom(result as import('rxjs').Observable<unknown>);
+
+    expect(authServiceMock.clearSessionOnLoginPage).not.toHaveBeenCalled();
+    expect(resolved).toBe(false);
   });
 });

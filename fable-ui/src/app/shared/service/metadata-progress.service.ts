@@ -1,10 +1,10 @@
 import {inject, Injectable, OnDestroy} from '@angular/core';
-import {BehaviorSubject, Subject, Subscription, timer} from 'rxjs';
+import {BehaviorSubject, EMPTY, merge, Subject, Subscription, timer} from 'rxjs';
 import {MetadataBatchProgressNotification} from '../model/metadata-batch-progress.model';
 import {MetadataTaskService} from '../../features/book/service/metadata-task';
 import {UserService} from '../../features/settings/user-management/user.service';
 import {LocalStorageService} from './local-storage.service';
-import {filter, switchMap, take} from 'rxjs/operators';
+import {catchError, filter, switchMap, take} from 'rxjs/operators';
 
 export function mergeMetadataTaskProgress(
   existing: MetadataBatchProgressNotification | undefined,
@@ -45,6 +45,8 @@ export class MetadataProgressService implements OnDestroy {
   private localStorageService = inject(LocalStorageService);
 
   private subscriptions = new Subscription();
+  private refreshTrigger$ = new Subject<void>();
+  private pollerActive = false;
 
   constructor() {
     this.restoreDismissedTaskIds();
@@ -58,16 +60,28 @@ export class MetadataProgressService implements OnDestroy {
         if (!this.hasMetadataPermissions(userState.user)) {
           return;
         }
-        const activeTasksSub = timer(0, 30000).pipe(
-          switchMap(() => this.metadataTaskService.getActiveTasks())
+        this.pollerActive = true;
+        const activeTasksSub = merge(timer(0, 30000), this.refreshTrigger$).pipe(
+          switchMap(() => this.metadataTaskService.getActiveTasks().pipe(
+            catchError(err => {
+              console.warn('Failed to fetch active metadata tasks:', err);
+              return EMPTY;
+            })
+          ))
         ).subscribe({
           next: (tasks) => this.syncActiveTasks(tasks),
-          error: (err) => console.warn('Failed to fetch active metadata tasks:', err)
         });
         this.subscriptions.add(activeTasksSub);
       });
 
     this.subscriptions.add(sub);
+  }
+
+  /** Triggers an immediate active-tasks sync (e.g. after WebSocket reconnect or tab resume). */
+  refreshNow(): void {
+    if (this.pollerActive) {
+      this.refreshTrigger$.next();
+    }
   }
 
   handleIncomingProgress(progress: MetadataBatchProgressNotification): void {
@@ -214,7 +228,9 @@ export class MetadataProgressService implements OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.pollerActive = false;
     this.subscriptions.unsubscribe();
+    this.refreshTrigger$.complete();
     this.progressMap.forEach(subject => subject.complete());
     this.progressUpdatesSubject.complete();
     this.activeTasksSubject.complete();

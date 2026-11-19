@@ -7,6 +7,7 @@ import {
   ReadingSessionApiService,
   CreateReadingSessionDto
 } from './reading-session-api.service';
+import { isTransientNetworkError } from '../../core/util/network-error.util';
 
 export interface ReadingSession {
   bookId: number;
@@ -35,9 +36,13 @@ export class ReadingSessionService {
   private readonly IDLE_TIMEOUT_MS = 5 * 60 * 1000;
   private readonly MIN_SESSION_DURATION_SECONDS = 30;
   private readonly ACTIVITY_DEBOUNCE_MS = 1000;
+  private readonly PENDING_SESSIONS_STORAGE_KEY = 'fable.pendingReadingSessions.v1';
+  private readonly MAX_PENDING_SESSIONS = 20;
+  private flushingPending = false;
 
   constructor() {
     this.setupBrowserLifecycleListeners();
+    this.flushPendingSessions();
   }
 
   private setupBrowserLifecycleListeners(): void {
@@ -165,7 +170,8 @@ export class ReadingSessionService {
 
     const success = this.apiService.sendSessionBeacon(sessionData);
     if (!success) {
-      this.logError('sendBeacon failed, request may not have been queued');
+      this.logError('sendBeacon failed, queueing session locally for next reconnect');
+      this.enqueuePendingSession(sessionData);
     }
 
     this.cleanup();
@@ -187,8 +193,88 @@ export class ReadingSessionService {
 
     this.apiService.createSession(sessionData).subscribe({
       next: () => this.log('Session saved to backend'),
-      error: (err: HttpErrorResponse) => this.logError('Failed to save session', err)
+      error: (err: HttpErrorResponse) => {
+        if (isTransientNetworkError(err)) {
+          this.logError('Transient network error saving session; queued for retry on reconnect', err);
+          this.enqueuePendingSession(sessionData);
+        } else {
+          this.logError('Failed to save session', err);
+        }
+      }
     });
+  }
+
+  /** Replays any reading sessions queued locally while offline. */
+  flushPendingSessions(): void {
+    if (this.flushingPending) {
+      return;
+    }
+    const pending = this.loadPendingSessions();
+    if (pending.length === 0) {
+      return;
+    }
+    this.flushingPending = true;
+    this.flushNextPendingSession(pending);
+  }
+
+  private flushNextPendingSession(queue: CreateReadingSessionDto[]): void {
+    if (queue.length === 0) {
+      this.savePendingSessions([]);
+      this.flushingPending = false;
+      return;
+    }
+
+    const [current, ...rest] = queue;
+    this.apiService.createSession(current).subscribe({
+      next: () => {
+        this.savePendingSessions(rest);
+        this.flushNextPendingSession(rest);
+      },
+      error: (err: unknown) => {
+        if (isTransientNetworkError(err)) {
+          // Still offline; preserve current + remaining sessions for the next reconnect.
+          this.savePendingSessions(queue);
+          this.flushingPending = false;
+        } else {
+          // Permanent 4xx/validation error: drop bad item and keep flushing remaining ones.
+          this.logError('Dropping unrecoverable queued reading session', err);
+          this.savePendingSessions(rest);
+          this.flushNextPendingSession(rest);
+        }
+      }
+    });
+  }
+
+  private enqueuePendingSession(sessionData: CreateReadingSessionDto): void {
+    const queue = this.loadPendingSessions();
+    queue.push(sessionData);
+    const bounded = queue.slice(-this.MAX_PENDING_SESSIONS);
+    this.savePendingSessions(bounded);
+  }
+
+  private loadPendingSessions(): CreateReadingSessionDto[] {
+    try {
+      const raw = localStorage.getItem(this.PENDING_SESSIONS_STORAGE_KEY);
+      if (!raw) {
+        return [];
+      }
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private savePendingSessions(queue: CreateReadingSessionDto[]): void {
+    try {
+      if (queue.length === 0) {
+        localStorage.removeItem(this.PENDING_SESSIONS_STORAGE_KEY);
+      } else {
+        localStorage.setItem(this.PENDING_SESSIONS_STORAGE_KEY, JSON.stringify(queue));
+      }
+    } catch {
+      // Ignore quota/storage errors
+    }
   }
 
   private buildSessionData(

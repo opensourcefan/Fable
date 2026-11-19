@@ -146,9 +146,16 @@ export class AppComponent implements OnInit, OnDestroy {
   };
 
   private checkServerReachable(): Promise<boolean> {
-    return fetch('/api/public/settings', {method: 'HEAD', cache: 'no-store'})
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    return fetch('/api/public/settings', {
+      method: 'HEAD',
+      cache: 'no-store',
+      signal: controller.signal
+    })
       .then(() => true)
-      .catch(() => false);
+      .catch(() => false)
+      .finally(() => clearTimeout(timeoutId));
   }
 
   reload(): void {

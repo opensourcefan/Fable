@@ -11,7 +11,9 @@ import { AppComponent } from './app/app.component';
 import Aura from '@primeuix/themes/aura';
 import { routes } from './app/app.routes';
 import { AuthInterceptorService } from './app/core/security/auth-interceptor.service';
+import { NetworkRetryInterceptor } from './app/core/security/network-retry.interceptor';
 import { AuthService, websocketInitializer } from './app/shared/service/auth.service';
+import { ConnectionRecoveryService } from './app/shared/service/connection-recovery.service';
 import { inject, isDevMode, provideAppInitializer, provideZoneChangeDetection } from '@angular/core';
 import { initializeAuthFactory } from './app/core/security/auth-initializer';
 import { StartupService } from './app/shared/service/startup.service';
@@ -29,10 +31,14 @@ bootstrapApplication(AppComponent, {
       return websocketInitializer(authService)();
     }),
     provideAppInitializer(() => {
+      const recovery = inject(ConnectionRecoveryService);
+      recovery.initialize();
+    }),
+    provideAppInitializer(() => {
       const startup = inject(StartupService);
       return startup.load();
     }),
-    provideHttpClient(withInterceptors([AuthInterceptorService])),
+    provideHttpClient(withInterceptors([AuthInterceptorService, NetworkRetryInterceptor])),
     provideAppInitializer(initializeAuthFactory()),
     provideRouter(routes),
     DialogService,

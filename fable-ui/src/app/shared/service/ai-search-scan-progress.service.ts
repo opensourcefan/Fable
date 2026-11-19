@@ -1,9 +1,18 @@
 import {inject, Injectable} from '@angular/core';
+import {HttpClient} from '@angular/common/http';
 import {BehaviorSubject, Observable} from 'rxjs';
 import {filter} from 'rxjs/operators';
 import {FailureNotificationService} from './failure-notification.service';
 import {RxStompService} from '../websocket/rx-stomp.service';
 import {RxStompState} from '@stomp/rx-stomp';
+import {API_CONFIG} from '../../core/config/api-config';
+
+const DISCONNECT_GRACE_MS = 30_000;
+
+export interface AiSearchScanStatusResponse {
+  running: boolean;
+  progress: AiSearchProgressPayload | null;
+}
 
 export interface AiSearchProgressPayload {
   mode: 'SINGLE' | 'BATCH';
@@ -20,10 +29,12 @@ export interface AiSearchProgressPayload {
 export class AiSearchScanProgressService {
   private readonly failureNotifications = inject(FailureNotificationService);
   private readonly rxStompService = inject(RxStompService);
+  private readonly http = inject(HttpClient, {optional: true});
   private readonly progressSubject = new BehaviorSubject<AiSearchProgressPayload | null>(null);
   private readonly embeddingBookIdsSubject = new BehaviorSubject<Set<number>>(new Set());
   private readonly isStoppingSubject = new BehaviorSubject<boolean>(false);
   private clearTimer: ReturnType<typeof setTimeout> | undefined;
+  private disconnectClearTimer: ReturnType<typeof setTimeout> | undefined;
 
   readonly progress$ = this.progressSubject.asObservable();
   readonly embeddingBookIds$ = this.embeddingBookIdsSubject.asObservable();
@@ -31,10 +42,47 @@ export class AiSearchScanProgressService {
 
   constructor() {
     this.rxStompService?.connectionState$?.subscribe(state => {
-      if (state !== RxStompState.OPEN) {
-        this.progressSubject.next(null);
+      if (state === RxStompState.OPEN) {
+        this.cancelDisconnectClearTimer();
+      } else if (this.progressSubject.value && !this.disconnectClearTimer) {
+        // Keep progress visible during brief network blips; clear if disconnected > 30s.
+        this.disconnectClearTimer = setTimeout(() => {
+          this.disconnectClearTimer = undefined;
+          this.progressSubject.next(null);
+          this.isStoppingSubject.next(false);
+        }, DISCONNECT_GRACE_MS);
       }
     });
+  }
+
+  /** Reconciles local AI search progress card with server truth after reconnect. */
+  reconcileWithServer(): void {
+    if (!this.http) {
+      return;
+    }
+    this.http.get<AiSearchScanStatusResponse>(`${API_CONFIG.BASE_URL}/api/v1/ai/search/scan-status`).subscribe({
+      next: (status) => {
+        if (status?.running && status.progress) {
+          this.handleIncomingProgress(status.progress);
+        } else if (!status?.running) {
+          const current = this.progressSubject.value;
+          if (current && (current.event === 'STARTED' || current.event === 'IN_PROGRESS')) {
+            this.clearProgress();
+            this.isStoppingSubject.next(false);
+          }
+        }
+      },
+      error: () => {
+        // Ignore transient failure; next reconnect will reconcile again.
+      }
+    });
+  }
+
+  private cancelDisconnectClearTimer(): void {
+    if (this.disconnectClearTimer) {
+      clearTimeout(this.disconnectClearTimer);
+      this.disconnectClearTimer = undefined;
+    }
   }
 
   setStopping(stopping: boolean): void {
@@ -42,6 +90,7 @@ export class AiSearchScanProgressService {
   }
 
   clearProgress(): void {
+    this.cancelDisconnectClearTimer();
     if (this.clearTimer) {
       clearTimeout(this.clearTimer);
       this.clearTimer = undefined;
@@ -70,6 +119,7 @@ export class AiSearchScanProgressService {
   }
 
   handleIncomingProgress(progress: AiSearchProgressPayload): void {
+    this.cancelDisconnectClearTimer();
     if (this.clearTimer) {
       clearTimeout(this.clearTimer);
       this.clearTimer = undefined;

@@ -1,5 +1,5 @@
 import {TestBed} from '@angular/core/testing';
-import {of} from 'rxjs';
+import {of, throwError} from 'rxjs';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {
   MetadataBatchPhase,
@@ -144,5 +144,51 @@ describe('MetadataProgressService dismissal', () => {
       'bl-dismissed-metadata-task-ids',
       expect.arrayContaining(['done-1', 'err-1'])
     );
+  });
+
+  it('survives a transient poll error and syncs tasks on subsequent refreshNow()', () => {
+    vi.useFakeTimers();
+    try {
+      const recoveredTask = progress({taskId: 'recovered-task', completed: 3, total: 10});
+      const getActiveTasks = vi.fn()
+        .mockReturnValueOnce(throwError(() => new Error('Network down')))
+        .mockReturnValueOnce(of([recoveredTask]));
+
+      TestBed.configureTestingModule({
+        providers: [
+          MetadataProgressService,
+          {provide: MetadataTaskService, useValue: {getActiveTasks}},
+          {
+            provide: UserService,
+            useValue: {
+              userState$: of({
+                user: {permissions: {admin: true, canEditMetadata: true}},
+              }),
+            },
+          },
+          {
+            provide: LocalStorageService,
+            useValue: {get: vi.fn().mockReturnValue(null), trySet: vi.fn().mockReturnValue(true)},
+          },
+        ],
+      });
+
+      service = TestBed.inject(MetadataProgressService);
+      // Let initial timer(0, 30000) tick execute and hit the transient error
+      vi.advanceTimersByTime(1);
+      expect(getActiveTasks).toHaveBeenCalledTimes(1);
+      expect(service.getActiveTasks()).toEqual({});
+
+      // Poller must still be alive for subsequent refreshNow()
+      service.refreshNow();
+      expect(service.getActiveTasks()['recovered-task']).toMatchObject({
+        taskId: 'recovered-task',
+        completed: 3,
+        total: 10,
+      });
+      expect(getActiveTasks).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
