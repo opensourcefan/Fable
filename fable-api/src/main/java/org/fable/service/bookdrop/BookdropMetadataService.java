@@ -121,15 +121,11 @@ public class BookdropMetadataService {
             fetchedMetadata = isbnMetadataFillService.mergeByIsbn(isbn, initial);
             if (fetchedMetadata == null) {
                 Map<MetadataProvider, BookMetadata> metadataMap = metadataRefreshService.fetchMetadataForBook(providers, book);
-                fetchedMetadata = metadataMap.isEmpty()
-                        ? null
-                        : metadataRefreshService.buildFetchMetadata(initial, book.getId(), refreshOptions, metadataMap);
+                fetchedMetadata = metadataRefreshService.buildFetchMetadata(initial, book.getId(), refreshOptions, metadataMap);
             }
         } else {
             Map<MetadataProvider, BookMetadata> metadataMap = metadataRefreshService.fetchMetadataForBook(providers, book);
-            fetchedMetadata = metadataMap.isEmpty()
-                    ? null
-                    : metadataRefreshService.buildFetchMetadata(initial, book.getId(), refreshOptions, metadataMap);
+            fetchedMetadata = metadataRefreshService.buildFetchMetadata(initial, book.getId(), refreshOptions, metadataMap);
         }
         BookdropFileEntity latestEntity = bookdropFileRepository.findById(bookdropFileId).orElse(null);
         if (latestEntity == null || latestEntity.getStatus() != PENDING_REVIEW) {
