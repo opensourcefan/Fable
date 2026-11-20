@@ -250,9 +250,19 @@ public class BookController {
     @Operation(summary = "Release books from staging", description = "Clear the staging flag on books after metadata review. Does not change library or shelf membership.")
     @ApiResponse(responseCode = "200", description = "Books released from staging successfully")
     @PostMapping("/staging/release")
+    @PreAuthorize("@securityUtil.canEditMetadata() or @securityUtil.isAdmin()")
     public ResponseEntity<List<Book>> releaseFromStaging(
             @Parameter(description = "Staging release request") @RequestBody @Valid StagingReleaseRequest request) {
         return ResponseEntity.ok(bookService.releaseFromStaging(request.getBookIds()));
+    }
+
+    @Operation(summary = "Stage books for review", description = "Move one or more books back into the Staging queue for metadata review.")
+    @ApiResponse(responseCode = "200", description = "Books staged successfully")
+    @PostMapping("/staging/stage")
+    @PreAuthorize("@securityUtil.canEditMetadata() or @securityUtil.isAdmin()")
+    public ResponseEntity<List<Book>> stageForReview(
+            @Parameter(description = "Staging request") @RequestBody @Valid StagingReleaseRequest request) {
+        return ResponseEntity.ok(bookService.stageForReview(request.getBookIds()));
     }
 
     @Operation(summary = "Assign file type to books", description = "Assign a custom file type to one or more books.")

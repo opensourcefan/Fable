@@ -31,6 +31,7 @@ import org.fable.repository.MetadataFetchJobRepository;
 import org.fable.repository.MetadataFetchProposalRepository;
 import org.fable.repository.TaskHistoryRepository;
 import org.fable.repository.BookRepository;
+import org.fable.service.library.LibraryVisibilityService;
 import org.fable.service.task.TaskService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -69,6 +70,7 @@ public class MetadataTaskService {
     private final BookRepository bookRepository;
     private final MetadataRefreshService metadataRefreshService;
     private final ObjectMapper objectMapper;
+    private final LibraryVisibilityService libraryVisibilityService;
 
     public Optional<MetadataTaskDetailsResponse> getTaskWithProposals(String taskId) {
         return metadataFetchTaskRepository.findById(taskId)
@@ -83,11 +85,39 @@ public class MetadataTaskService {
         List<MetadataFetchProposalEntity> proposals =
                 proposalRepository.findAllByStatusWithJob(FetchedMetadataProposalStatus.FETCHED);
 
+        FableUser user = authenticationService.getAuthenticatedUser();
+        java.util.Set<Long> allowedBookIds = null;
+        if (user != null) {
+            java.util.Set<Long> accessibleLibraryIds = libraryVisibilityService.getAccessibleLibraryIds(user);
+            if (accessibleLibraryIds.isEmpty()) {
+                return PendingMetadataReviewResponse.builder()
+                        .count(0)
+                        .bookIds(List.of())
+                        .tasks(List.of())
+                        .build();
+            }
+            java.util.Set<Long> proposalBookIds = proposals.stream()
+                    .map(MetadataFetchProposalEntity::getBookId)
+                    .filter(java.util.Objects::nonNull)
+                    .collect(java.util.stream.Collectors.toSet());
+            if (proposalBookIds.isEmpty()) {
+                return PendingMetadataReviewResponse.builder()
+                        .count(0)
+                        .bookIds(List.of())
+                        .tasks(List.of())
+                        .build();
+            }
+            allowedBookIds = bookRepository.findBookIdsByIdInAndLibraryIdIn(proposalBookIds, accessibleLibraryIds);
+        }
+
         LinkedHashSet<Long> bookIds = new LinkedHashSet<>();
         Map<String, LinkedHashSet<Long>> taskBookIds = new LinkedHashMap<>();
 
         for (MetadataFetchProposalEntity proposal : proposals) {
             if (proposal.getBookId() == null || proposal.getJob() == null) {
+                continue;
+            }
+            if (allowedBookIds != null && !allowedBookIds.contains(proposal.getBookId())) {
                 continue;
             }
             String taskId = proposal.getJob().getTaskId();
@@ -117,9 +147,20 @@ public class MetadataTaskService {
      */
     @Transactional(readOnly = true)
     public StagingTriageResponse getStagingTriage() {
+        FableUser user = authenticationService.getAuthenticatedUser();
+        List<BookEntity> stagedBooks;
+        if (user != null) {
+            java.util.Set<Long> accessibleLibraryIds = libraryVisibilityService.getAccessibleLibraryIds(user);
+            if (accessibleLibraryIds.isEmpty()) {
+                return StagingTriageResponse.builder().build();
+            }
+            stagedBooks = bookRepository.findAllStagedWithMetadataByLibraryIds(accessibleLibraryIds);
+        } else {
+            stagedBooks = bookRepository.findAllStagedWithMetadata();
+        }
+
         PendingMetadataReviewResponse pending = getPendingReviews();
         LinkedHashSet<Long> reviewIds = new LinkedHashSet<>(pending.getBookIds());
-        List<BookEntity> stagedBooks = bookRepository.findAllStagedWithMetadata();
         LinkedHashSet<Long> stagedBookIds = new LinkedHashSet<>();
         for (BookEntity book : stagedBooks) {
             if (book.getId() != null) {

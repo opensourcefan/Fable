@@ -54,6 +54,24 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
             """)
     List<BookEntity> findAllStagedWithMetadata();
 
+    @EntityGraph(attributePaths = {"metadata"})
+    @Query("""
+            SELECT b FROM BookEntity b
+            WHERE b.staged = true
+              AND b.library.id IN :libraryIds
+              AND (b.deleted IS NULL OR b.deleted = false)
+            """)
+    List<BookEntity> findAllStagedWithMetadataByLibraryIds(@Param("libraryIds") Collection<Long> libraryIds);
+
+    @Query("""
+            SELECT b.id FROM BookEntity b
+            WHERE b.id IN :bookIds
+              AND b.library.id IN :libraryIds
+              AND (b.deleted IS NULL OR b.deleted = false)
+            """)
+    Set<Long> findBookIdsByIdInAndLibraryIdIn(@Param("bookIds") Collection<Long> bookIds,
+                                              @Param("libraryIds") Collection<Long> libraryIds);
+
     @Query("SELECT DISTINCT b FROM BookEntity b JOIN b.bookFiles bf WHERE b.libraryPath.id = :libraryPathId AND (bf.fileSubPath = :fileSubPathPrefix OR bf.fileSubPath LIKE CONCAT(:fileSubPathPrefix, '/%')) AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false)")
     List<BookEntity> findAllByLibraryPathIdAndFileSubPathStartingWith(@Param("libraryPathId") Long libraryPathId, @Param("fileSubPathPrefix") String fileSubPathPrefix);
 

@@ -899,19 +899,20 @@ public class BookService {
             Long shelfId, boolean unshelved, boolean staged, List<String> mediaTypes, String filterMode, FableUser user) {
         boolean orMode = "or".equalsIgnoreCase(filterMode);
 
+        List<Specification<BookEntity>> scopeSpecs = new ArrayList<>();
         List<Specification<BookEntity>> specs = new ArrayList<>();
 
         if (shelfId != null) {
             validateShelfAccess(shelfId, user);
-            specs.add(AppBookSpecification.inShelf(shelfId));
+            scopeSpecs.add(AppBookSpecification.inShelf(shelfId));
         }
 
         if (unshelved) {
-            specs.add(AppBookSpecification.withoutShelvesForUser(user.getId()));
+            scopeSpecs.add(AppBookSpecification.withoutShelvesForUser(user.getId()));
         }
 
         if (staged) {
-            specs.add(AppBookSpecification.staged());
+            scopeSpecs.add(AppBookSpecification.staged());
         }
 
         if (mediaTypes != null && !mediaTypes.isEmpty()) {
@@ -986,13 +987,22 @@ public class BookService {
             specs.add(AppBookSpecification.withContentRating(contentRating));
         }
 
-        if (specs.isEmpty()) {
+        Specification<BookEntity> facetSpec = null;
+        if (!specs.isEmpty()) {
+            Specification<BookEntity>[] specArray = specs.toArray(new Specification[0]);
+            facetSpec = orMode ? AppBookSpecification.combineOr(specArray)
+                               : AppBookSpecification.combine(specArray);
+        }
+
+        if (facetSpec != null) {
+            scopeSpecs.add(facetSpec);
+        }
+
+        if (scopeSpecs.isEmpty()) {
             return (root, query, cb) -> cb.conjunction();
         }
 
-        Specification<BookEntity>[] specArray = specs.toArray(new Specification[0]);
-        return orMode ? AppBookSpecification.combineOr(specArray)
-                      : AppBookSpecification.combine(specArray);
+        return AppBookSpecification.combine(scopeSpecs.toArray(new Specification[0]));
     }
 
     private void validateShelfAccess(Long shelfId, FableUser user) {

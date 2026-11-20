@@ -15,6 +15,7 @@ import org.fable.repository.BookRepository;
 import org.fable.repository.MetadataFetchJobRepository;
 import org.fable.repository.MetadataFetchProposalRepository;
 import org.fable.repository.TaskHistoryRepository;
+import org.fable.service.library.LibraryVisibilityService;
 import org.fable.service.metadata.MetadataRefreshService;
 import org.fable.service.metadata.MetadataTaskService;
 import org.fable.service.task.TaskService;
@@ -60,6 +61,9 @@ class MetadataTaskHistoryServiceTest {
 
     @Mock
     private ObjectMapper objectMapper;
+
+    @Mock
+    private LibraryVisibilityService libraryVisibilityService;
 
     @InjectMocks
     private MetadataTaskService service;

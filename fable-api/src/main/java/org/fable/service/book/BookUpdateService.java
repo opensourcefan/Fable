@@ -9,9 +9,11 @@ import org.fable.model.dto.response.BookStatusUpdateResponse;
 import org.fable.model.dto.response.PersonalRatingUpdateResponse;
 import org.fable.model.entity.*;
 import org.fable.model.enums.BookFileType;
+import org.fable.model.enums.FetchedMetadataProposalStatus;
 import org.fable.model.enums.ReadStatus;
 import org.fable.model.enums.UserPermission;
 import org.fable.repository.*;
+import org.fable.service.library.LibraryVisibilityService;
 import org.fable.service.progress.ReadingProgressService;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -41,6 +43,8 @@ public class BookUpdateService {
     private final BookQueryService bookQueryService;
     private final ReadingProgressService readingProgressService;
     private final EbookViewerPreferenceRepository ebookViewerPreferenceRepository;
+    private final LibraryVisibilityService libraryVisibilityService;
+    private final MetadataFetchProposalRepository proposalRepository;
 
     public void updateBookViewerSetting(long bookId, BookViewerSettings bookViewerSettings) {
         BookEntity book = bookRepository.findByIdWithBookFiles(bookId).orElseThrow(() -> ApiError.BOOK_NOT_FOUND.createException(bookId));
@@ -143,25 +147,63 @@ public class BookUpdateService {
     @Transactional
     public List<Book> releaseFromStaging(Set<Long> bookIds) {
         FableUser user = authenticationService.getAuthenticatedUser();
-        List<BookEntity> bookEntities = bookQueryService.findAllWithMetadataByIds(bookIds);
-        for (BookEntity bookEntity : bookEntities) {
-            bookEntity.setStaged(false);
+        if (user == null || user.getPermissions() == null
+                || (!user.getPermissions().isAdmin() && !UserPermission.CAN_EDIT_METADATA.isGranted(user.getPermissions()))) {
+            throw ApiError.PERMISSION_DENIED.createException(UserPermission.CAN_EDIT_METADATA);
         }
-        bookRepository.saveAll(bookEntities);
-        return buildBooksWithProgress(bookEntities, user.getId());
+
+        Set<Long> accessibleLibraryIds = libraryVisibilityService.getAccessibleLibraryIds(user);
+        List<BookEntity> bookEntities = bookQueryService.findAllWithMetadataByIds(bookIds);
+        validateBooksInAccessibleLibraries(bookEntities, accessibleLibraryIds);
+
+        List<BookEntity> changed = new ArrayList<>();
+        for (BookEntity bookEntity : bookEntities) {
+            if (!Boolean.TRUE.equals(bookEntity.getStaged())) {
+                continue;
+            }
+            bookEntity.setStaged(false);
+            bookEntity.setStagingCompletedAt(null);
+            changed.add(bookEntity);
+        }
+        if (changed.isEmpty()) {
+            return List.of();
+        }
+        bookRepository.saveAll(changed);
+
+        Set<Long> releasedIds = changed.stream().map(BookEntity::getId).collect(Collectors.toSet());
+        proposalRepository.updateStatusByBookIdsAndStatus(
+                releasedIds,
+                FetchedMetadataProposalStatus.FETCHED,
+                FetchedMetadataProposalStatus.REJECTED,
+                Instant.now(),
+                user.getId()
+        );
+        return buildBooksWithProgress(changed, user.getId());
     }
 
     @BroadcastBookUpdate
     @Transactional
     public List<Book> stageForReview(Set<Long> bookIds) {
         FableUser user = authenticationService.getAuthenticatedUser();
+        if (user != null) {
+            if (user.getPermissions() == null
+                    || (!user.getPermissions().isAdmin() && !UserPermission.CAN_EDIT_METADATA.isGranted(user.getPermissions()))) {
+                throw ApiError.PERMISSION_DENIED.createException(UserPermission.CAN_EDIT_METADATA);
+            }
+        }
         List<BookEntity> bookEntities = bookQueryService.findAllWithMetadataByIds(bookIds);
+        if (user != null) {
+            Set<Long> accessibleLibraryIds = libraryVisibilityService.getAccessibleLibraryIds(user);
+            validateBooksInAccessibleLibraries(bookEntities, accessibleLibraryIds);
+        }
+
         List<BookEntity> changed = new ArrayList<>();
         for (BookEntity bookEntity : bookEntities) {
             if (Boolean.TRUE.equals(bookEntity.getStaged())) {
                 continue;
             }
             bookEntity.setStaged(true);
+            bookEntity.setStagingCompletedAt(null);
             changed.add(bookEntity);
         }
         if (changed.isEmpty()) {
@@ -172,6 +214,15 @@ public class BookUpdateService {
             return changed.stream().map(bookMapper::toBook).collect(Collectors.toList());
         }
         return buildBooksWithProgress(changed, user.getId());
+    }
+
+    private void validateBooksInAccessibleLibraries(List<BookEntity> bookEntities, Set<Long> accessibleLibraryIds) {
+        for (BookEntity bookEntity : bookEntities) {
+            Long libraryId = bookEntity.getLibrary() != null ? bookEntity.getLibrary().getId() : null;
+            if (libraryId == null || !accessibleLibraryIds.contains(libraryId)) {
+                throw ApiError.PERMISSION_DENIED.createException(UserPermission.CAN_EDIT_METADATA);
+            }
+        }
     }
 
     private void updatePdfViewerSettings(long bookId, Long userId, BookViewerSettings settings) {

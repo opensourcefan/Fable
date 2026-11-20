@@ -26,6 +26,7 @@ import org.fable.repository.BookRepository;
 import org.fable.repository.MetadataFetchJobRepository;
 import org.fable.repository.MetadataFetchProposalRepository;
 import org.fable.repository.TaskHistoryRepository;
+import org.fable.service.library.LibraryVisibilityService;
 import org.fable.service.task.TaskService;
 import org.fable.task.TaskStatus;
 import org.junit.jupiter.api.Nested;
@@ -76,6 +77,9 @@ class MetadataTaskServiceTest {
 
     @Mock
     private ObjectMapper objectMapper;
+
+    @Mock
+    private LibraryVisibilityService libraryVisibilityService;
 
     @InjectMocks
     private MetadataTaskService service;
@@ -258,6 +262,37 @@ class MetadataTaskServiceTest {
             assertThat(result.getReviewCount()).isZero();
             assertThat(result.getReviewBookIds()).isEmpty();
             assertThat(result.getReviewTasks()).isEmpty();
+        }
+
+        @Test
+        void scopesStagingTriageToAuthenticatedUsersAccessibleLibraries() {
+            FableUser restrictedUser = FableUser.builder().id(7L).build();
+            when(authenticationService.getAuthenticatedUser()).thenReturn(restrictedUser);
+            when(libraryVisibilityService.getAccessibleLibraryIds(restrictedUser)).thenReturn(java.util.Set.of(10L));
+
+            MetadataFetchJobEntity task = buildTask("scoped-task", MetadataFetchTaskStatus.COMPLETED, new ArrayList<>());
+            MetadataFetchProposalEntity allowedProposal = MetadataFetchProposalEntity.builder()
+                    .proposalId(1L).job(task).bookId(100L).status(FetchedMetadataProposalStatus.FETCHED).build();
+            MetadataFetchProposalEntity forbiddenProposal = MetadataFetchProposalEntity.builder()
+                    .proposalId(2L).job(task).bookId(999L).status(FetchedMetadataProposalStatus.FETCHED).build();
+            task.setProposals(List.of(allowedProposal, forbiddenProposal));
+
+            BookEntity allowedBook = buildBook(100L, "Allowed", "allowed.epub");
+
+            when(bookRepository.findAllStagedWithMetadataByLibraryIds(java.util.Set.of(10L)))
+                    .thenReturn(List.of(allowedBook));
+            when(proposalRepository.findAllByStatusWithJob(FetchedMetadataProposalStatus.FETCHED))
+                    .thenReturn(List.of(allowedProposal, forbiddenProposal));
+            when(bookRepository.findBookIdsByIdInAndLibraryIdIn(java.util.Set.of(100L, 999L), java.util.Set.of(10L)))
+                    .thenReturn(java.util.Set.of(100L));
+
+            StagingTriageResponse result = service.getStagingTriage();
+
+            assertThat(result.getReviewBookIds()).containsExactly(100L);
+            assertThat(result.getReviewCount()).isEqualTo(1);
+            assertThat(result.getStagingCount()).isZero();
+            assertThat(result.getCompletedCount()).isZero();
+            verify(bookRepository, never()).findAllStagedWithMetadata();
         }
     }
 

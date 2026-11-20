@@ -8,8 +8,10 @@ import org.fable.model.dto.response.BookStatusUpdateResponse;
 import org.fable.model.dto.response.PersonalRatingUpdateResponse;
 import org.fable.model.entity.*;
 import org.fable.model.enums.BookFileType;
+import org.fable.model.enums.FetchedMetadataProposalStatus;
 import org.fable.model.enums.ReadStatus;
 import org.fable.repository.*;
+import org.fable.service.library.LibraryVisibilityService;
 import org.fable.service.progress.ReadingProgressService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -48,6 +50,10 @@ class BookUpdateServiceTest {
     private ReadingProgressService readingProgressService;
     @Mock
     private EbookViewerPreferenceRepository ebookViewerPreferenceRepository;
+    @Mock
+    private LibraryVisibilityService libraryVisibilityService;
+    @Mock
+    private MetadataFetchProposalRepository proposalRepository;
 
     @InjectMocks
     private BookUpdateService bookUpdateService;
@@ -67,7 +73,9 @@ class BookUpdateServiceTest {
                 authenticationService,
                 bookQueryService,
                 readingProgressService,
-                ebookViewerPreferenceRepository
+                ebookViewerPreferenceRepository,
+                libraryVisibilityService,
+                proposalRepository
         );
     }
 
@@ -324,15 +332,30 @@ class BookUpdateServiceTest {
         assertEquals(2, result.size());
     }
 
+    private FableUser.UserPermissions perms(boolean canEditMetadata, boolean admin) {
+        FableUser.UserPermissions p = new FableUser.UserPermissions();
+        p.setCanEditMetadata(canEditMetadata);
+        p.setAdmin(admin);
+        return p;
+    }
+
     @Test
-    void releaseFromStaging_clearsStagedFlagOnly() {
-        FableUser user = mock(FableUser.class);
+    void releaseFromStaging_clearsStagedFlagAndRejectsOrphanedProposals() {
+        FableUser user = FableUser.builder()
+                .id(1L)
+                .permissions(perms(true, false))
+                .build();
         when(authenticationService.getAuthenticatedUser()).thenReturn(user);
-        when(user.getId()).thenReturn(1L);
+        when(libraryVisibilityService.getAccessibleLibraryIds(user)).thenReturn(Set.of(10L));
+
+        LibraryEntity library = new LibraryEntity();
+        library.setId(10L);
 
         BookEntity bookEntity = new BookEntity();
         bookEntity.setId(1L);
+        bookEntity.setLibrary(library);
         bookEntity.setStaged(true);
+        bookEntity.setStagingCompletedAt(java.time.Instant.now());
         bookEntity.setBookFiles(List.of());
 
         when(bookQueryService.findAllWithMetadataByIds(Set.of(1L))).thenReturn(List.of(bookEntity));
@@ -343,6 +366,68 @@ class BookUpdateServiceTest {
         List<Book> result = bookUpdateService.releaseFromStaging(Set.of(1L));
 
         assertFalse(Boolean.TRUE.equals(bookEntity.getStaged()));
+        assertNull(bookEntity.getStagingCompletedAt());
+        verify(bookRepository).saveAll(List.of(bookEntity));
+        verify(proposalRepository).updateStatusByBookIdsAndStatus(
+                eq(Set.of(1L)),
+                eq(FetchedMetadataProposalStatus.FETCHED),
+                eq(FetchedMetadataProposalStatus.REJECTED),
+                any(),
+                eq(1L)
+        );
+        assertEquals(1, result.size());
+    }
+
+    @Test
+    void releaseFromStaging_rejectsUserWithoutEditMetadataPermission() {
+        FableUser readOnlyUser = FableUser.builder()
+                .id(2L)
+                .permissions(perms(false, false))
+                .build();
+        when(authenticationService.getAuthenticatedUser()).thenReturn(readOnlyUser);
+
+        assertThrows(APIException.class, () -> bookUpdateService.releaseFromStaging(Set.of(1L)));
+        verify(bookRepository, never()).saveAll(any());
+    }
+
+    @Test
+    void releaseFromStaging_rejectsBookOutsideAccessibleLibraries() {
+        FableUser user = FableUser.builder()
+                .id(3L)
+                .permissions(perms(true, false))
+                .build();
+        when(authenticationService.getAuthenticatedUser()).thenReturn(user);
+        when(libraryVisibilityService.getAccessibleLibraryIds(user)).thenReturn(Set.of(10L));
+
+        LibraryEntity forbiddenLib = new LibraryEntity();
+        forbiddenLib.setId(99L);
+        BookEntity bookEntity = new BookEntity();
+        bookEntity.setId(1L);
+        bookEntity.setLibrary(forbiddenLib);
+        bookEntity.setStaged(true);
+
+        when(bookQueryService.findAllWithMetadataByIds(Set.of(1L))).thenReturn(List.of(bookEntity));
+
+        assertThrows(APIException.class, () -> bookUpdateService.releaseFromStaging(Set.of(1L)));
+        verify(bookRepository, never()).saveAll(any());
+    }
+
+    @Test
+    void stageForReview_allowsBackgroundSystemExecutionWhenUserIsNull() {
+        when(authenticationService.getAuthenticatedUser()).thenReturn(null);
+
+        BookEntity bookEntity = new BookEntity();
+        bookEntity.setId(5L);
+        bookEntity.setStaged(false);
+        bookEntity.setStagingCompletedAt(java.time.Instant.now());
+
+        when(bookQueryService.findAllWithMetadataByIds(Set.of(5L))).thenReturn(List.of(bookEntity));
+        when(bookMapper.toBook(bookEntity)).thenReturn(Book.builder().id(5L).staged(true).build());
+
+        List<Book> result = bookUpdateService.stageForReview(Set.of(5L));
+
+        assertTrue(Boolean.TRUE.equals(bookEntity.getStaged()));
+        assertNull(bookEntity.getStagingCompletedAt());
         verify(bookRepository).saveAll(List.of(bookEntity));
         assertEquals(1, result.size());
     }
