@@ -141,6 +141,18 @@ export class AppMenuComponent implements OnInit, OnDestroy {
     {key: 'notebook', label: 'layout.menu.notebook'},
   ];
 
+  get visibleHomeItemOptions(): {key: HomeItemVisibilityKey; label: string}[] {
+    if (this.canAccessStaging()) {
+      return this.homeItemOptions;
+    }
+    return this.homeItemOptions.filter(option => option.key !== 'staging');
+  }
+
+  private canAccessStaging(): boolean {
+    const permissions = this.userService.getCurrentUser()?.permissions;
+    return !!(permissions?.admin || permissions?.canEditMetadata);
+  }
+
   get visibleSectionOrder(): string[] {
     const isAdmin = !!this.userService.getCurrentUser()?.permissions?.admin;
     return this.sectionOrder.filter(section => {
@@ -234,6 +246,7 @@ export class AppMenuComponent implements OnInit, OnDestroy {
           this.magicShelfSortOrder = this.validateSortOrder(userState.user.userSettings.sidebarMagicShelfSorting.order);
         }
         this.initMenus();
+        this.homeItemVisibilitySubject.next({...this.homeItemVisibility});
       }));
 
     const allBooksCount$ = this.createRefreshableCount$(() => this.bookService.getBooksCount());
@@ -257,7 +270,7 @@ export class AppMenuComponent implements OnInit, OnDestroy {
             endActionClass: 'dashboard-row-end-action',
             endActionCommand: () => this.dialogLauncherService.openDashboardSettingsDialog(),
           },
-          {
+          ...(this.canAccessStaging() ? [{
             label: this.t.translate('layout.menu.staging'),
             visibilityKey: 'staging',
             type: 'Staging',
@@ -265,7 +278,7 @@ export class AppMenuComponent implements OnInit, OnDestroy {
             routerLink: ['/staging'],
             bookCount$: stagingBooksCount$,
             showBookCount: true,
-          },
+          }] : []),
           {
             label: this.t.translate('layout.menu.allBooks'),
             visibilityKey: 'allBooks',

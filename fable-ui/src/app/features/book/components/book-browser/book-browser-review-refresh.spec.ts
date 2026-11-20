@@ -97,4 +97,62 @@ describe('BookBrowserComponent metadata review refresh', () => {
     expect(rebuildStagingBookState).toHaveBeenCalledOnce();
     expect(markForCheck).toHaveBeenCalledOnce();
   });
+
+  it('clears selections when switching Staging triage tabs', () => {
+    const deselectAll = vi.fn();
+    const syncStagingTriageModeQuery = vi.fn();
+    const rebuildStagingBookState = vi.fn();
+    const markForCheck = vi.fn();
+    const componentLike = {
+      entityType: EntityType.STAGING,
+      stagingTriageMode: 'staging',
+      stagingCompletedCount: 3,
+      pendingReviewCount: 0,
+      pendingReviewPrimaryTaskId: null,
+      lastStagingTriageSignature: 'sig',
+      bookSelectionService: {deselectAll},
+      syncStagingTriageModeQuery,
+      rebuildStagingBookState,
+      cdr: {markForCheck},
+    };
+
+    const setStagingTriageMode = (BookBrowserComponent.prototype as unknown as {
+      setStagingTriageMode: (mode: 'staging' | 'completed' | 'review') => void;
+    }).setStagingTriageMode;
+
+    setStagingTriageMode.call(componentLike, 'completed');
+
+    expect(deselectAll).toHaveBeenCalledOnce();
+    expect(componentLike.stagingTriageMode).toBe('completed');
+    expect(rebuildStagingBookState).toHaveBeenCalledOnce();
+  });
+
+  it('requires confirmation before releasing when hidden selections exist', () => {
+    const confirm = vi.fn();
+    const executeReleaseFromStaging = vi.fn();
+    const componentLike = {
+      entityType: EntityType.STAGING,
+      selectedBooks: new Set([1, 2, 3]),
+      hiddenSelectedCount: 2,
+      get hasHiddenSelections() {
+        return this.hiddenSelectedCount > 0;
+      },
+      confirmationService: {confirm},
+      t: {translate: (key: string) => key},
+      executeReleaseFromStaging,
+    };
+
+    const releaseFromStaging = (BookBrowserComponent.prototype as unknown as {
+      releaseFromStaging: () => void;
+    }).releaseFromStaging;
+
+    releaseFromStaging.call(componentLike);
+
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(executeReleaseFromStaging).not.toHaveBeenCalled();
+
+    const confirmArg = confirm.mock.calls[0][0] as {accept: () => void};
+    confirmArg.accept();
+    expect(executeReleaseFromStaging).toHaveBeenCalledWith(new Set([1, 2, 3]));
+  });
 });

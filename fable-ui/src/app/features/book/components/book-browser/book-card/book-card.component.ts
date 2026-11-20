@@ -987,6 +987,46 @@ export class BookCardComponent implements OnInit, OnChanges, AfterViewInit, OnDe
       });
     }
 
+    if (this.user?.permissions.canEditMetadata || this.user?.permissions.admin) {
+      items.push(book.staged
+        ? {
+          label: this.t.translate('book.card.menu.releaseFromStaging'),
+          icon: 'pi pi-check-circle',
+          command: () => {
+            this.bookService.releaseFromStaging(new Set([book.id])).subscribe({
+              next: () => {
+                this.messageService.add({
+                  severity: 'success',
+                  summary: this.t.translate('common.success'),
+                  detail: this.t.translate('book.card.toast.releaseFromStagingSuccessDetail'),
+                });
+              },
+              error: (err) => {
+                this.toastError(this.t.translate('common.error'), err?.error?.message || this.t.translate('book.card.toast.releaseFromStagingFailedDetail'));
+              }
+            });
+          }
+        }
+        : {
+          label: this.t.translate('book.card.menu.sendToStaging'),
+          icon: 'pi pi-inbox',
+          command: () => {
+            this.bookService.stageForReview(new Set([book.id])).subscribe({
+              next: () => {
+                this.messageService.add({
+                  severity: 'success',
+                  summary: this.t.translate('common.success'),
+                  detail: this.t.translate('book.card.toast.sendToStagingSuccessDetail'),
+                });
+              },
+              error: (err) => {
+                this.toastError(this.t.translate('common.error'), err?.error?.message || this.t.translate('book.card.toast.sendToStagingFailedDetail'));
+              }
+            });
+          }
+        });
+    }
+
     return items;
   }
 

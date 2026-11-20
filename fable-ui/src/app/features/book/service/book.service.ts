@@ -490,6 +490,16 @@ export class BookService {
     );
   }
 
+  stageForReview(bookIds: Set<number | undefined>): Observable<Book[]> {
+    return this.bookPatchService.stageForReview(bookIds).pipe(
+      catchError(error => {
+        const currentState = this.bookStateService.getCurrentBookState();
+        this.bookStateService.updateBookState({...currentState, error: error.message});
+        throw error;
+      })
+    );
+  }
+
   updateFileType(bookIds: Set<number | undefined>, fileType: string | null): Observable<Book[]> {
     return this.bookPatchService.updateFileType(bookIds, fileType).pipe(
       catchError(error => {

@@ -425,6 +425,55 @@ export class BookMenuService {
       });
     }
 
+    if (permissions?.canEditMetadata || permissions?.admin) {
+      const books = this.bookService.getCurrentBookState().books ?? [];
+      const selectedList = books.filter(b => selectedBooks.has(b.id));
+      const hasUnstagedSelection = selectedList.length === 0 || selectedList.some(b => !b.staged);
+      if (hasUnstagedSelection) {
+        items.push({
+          label: this.t.translate('book.menuService.menu.sendToStaging'),
+          icon: 'pi pi-inbox',
+          command: () => {
+            const idsToStage = new Set(selectedBooks);
+            this.confirmationService.confirm({
+              message: this.t.translate('book.menuService.confirm.sendToStagingMessage', {count: idsToStage.size}),
+              header: this.t.translate('book.menuService.confirm.sendToStagingHeader'),
+              icon: 'pi pi-inbox',
+              acceptLabel: this.t.translate('common.confirm'),
+              rejectLabel: this.t.translate('common.cancel'),
+              acceptButtonProps: {
+                label: this.t.translate('common.confirm'),
+                severity: 'info'
+              },
+              rejectButtonProps: {
+                label: this.t.translate('common.cancel'),
+                severity: 'secondary'
+              },
+              accept: () => {
+                this.writeProgressService.show(this.t.translate('book.menuService.loading.sendingToStaging', {count: idsToStage.size}));
+                this.bookService.stageForReview(idsToStage)
+                  .subscribe({
+                    next: () => {
+                      this.writeProgressService.complete(this.t.translate('book.menuService.toast.sendToStagingSuccessDetail'));
+                      this.messageService.add({
+                        severity: 'success',
+                        summary: this.t.translate('common.success'),
+                        detail: this.t.translate('book.menuService.toast.sendToStagingSuccessDetail'),
+                        life: 2000
+                      });
+                    },
+                    error: (err: HttpErrorResponse) => {
+                      const apiError = err.error as APIException;
+                      this.writeProgressService.fail(apiError?.message || this.t.translate('book.menuService.toast.sendToStagingFailedDetail'));
+                    }
+                  });
+              }
+            });
+          }
+        });
+      }
+    }
+
     return items;
   }
 }

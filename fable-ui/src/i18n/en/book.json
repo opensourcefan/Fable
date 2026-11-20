@@ -22,7 +22,9 @@
       "wipeMetadataMessage": "Are you sure you want to delete all metadata for {{ count }} selected book(s)?\n\nThis clears fetched metadata fields and cannot be undone.",
       "wipeMetadataHeader": "Delete Metadata",
       "restoreTitlesFromFilenamesMessage": "Restore missing titles from the primary filename for {{ count }} selected book(s)?\n\nOnly books with a blank, unlocked title and an available primary filename will be updated.",
-      "restoreTitlesFromFilenamesHeader": "Restore Titles From Filenames"
+      "restoreTitlesFromFilenamesHeader": "Restore Titles From Filenames",
+      "releaseHiddenHeader": "Release Selected Books",
+      "releaseHiddenMessage": "You have {{ count }} book(s) selected, including {{ hiddenCount }} outside the current view.\n\nRelease all {{ count }} selected book(s) from Staging?"
     },
     "toast": {
       "sortSavedSummary": "Sort Saved",
@@ -151,6 +153,8 @@
       "customFetch": "Custom Fetch",
       "regenerateCover": "Regenerate Cover (File)",
       "generateCustomCover": "Generate Custom Cover",
+      "releaseFromStaging": "Release from Staging",
+      "sendToStaging": "Send to Staging",
       "moreActions": "More Actions",
       "embedForAiSearch": "Embed for AI Search",
       "markForEmbedding": "Mark for embedding",
@@ -203,7 +207,11 @@
       "markAiSearchSuccessDetail": "Book successfully marked for AI Search embedding.",
       "unmarkAiSearchSuccessDetail": "Book successfully unmarked for AI Search embedding.",
       "deleteAiSearchEmbeddingsSuccessDetail": "AI Search embeddings deleted successfully for \"{{ title }}\".",
-      "deleteAiSearchEmbeddingsFailedDetail": "Failed to delete AI Search embeddings."
+      "deleteAiSearchEmbeddingsFailedDetail": "Failed to delete AI Search embeddings.",
+      "releaseFromStagingSuccessDetail": "Book released from Staging.",
+      "releaseFromStagingFailedDetail": "Failed to release book from Staging.",
+      "sendToStagingSuccessDetail": "Book sent to Staging.",
+      "sendToStagingFailedDetail": "Failed to send book to Staging."
     },
     "alt": {
       "cover": "Cover of {{ title }}",
@@ -283,7 +291,8 @@
       "clearContentRating": "Clear Content Rating",
       "removeFromAllShelves": "Remove from all shelves",
       "resetFableProgress": "Reset Reading Odyssey Progress",
-      "resetKOReaderProgress": "Reset KOReader Progress"
+      "resetKOReaderProgress": "Reset KOReader Progress",
+      "sendToStaging": "Send to Staging"
     },
     "confirm": {
       "autoFetchMetadataMessage": "Are you sure you want to Auto Fetch Metadata for {{ count }} book(s)? This will request external data and could overwrite unlocked fields.",
@@ -304,7 +313,9 @@
       "unshelveHeader": "Confirm Unshelve",
       "resetFableMessage": "Are you sure you want to reset Fable reading progress for {{ count }} book(s)?",
       "resetKOReaderMessage": "Are you sure you want to reset KOReader reading progress for {{ count }} book(s)?",
-      "resetHeader": "Confirm Reset"
+      "resetHeader": "Confirm Reset",
+      "sendToStagingMessage": "Send {{ count }} selected book(s) back to Staging for metadata triage?",
+      "sendToStagingHeader": "Send to Staging"
     },
     "toast": {
       "readStatusUpdatedSummary": "Read Status Updated",
@@ -330,7 +341,9 @@
       "fableProgressResetDetail": "Fable reading progress has been reset.",
       "koreaderProgressResetDetail": "KOReader reading progress has been reset.",
       "failedSummary": "Failed",
-      "progressResetFailedDetail": "Could not reset progress."
+      "progressResetFailedDetail": "Could not reset progress.",
+      "sendToStagingSuccessDetail": "Books sent to Staging",
+      "sendToStagingFailedDetail": "Failed to send books to Staging"
     },
     "loading": {
       "updatingReadStatus": "Updating read status for {{ count }} book(s)...",
@@ -340,7 +353,8 @@
       "clearingContentRating": "Clearing content rating for {{ count }} book(s)...",
       "removingFromShelves": "Removing {{ count }} book(s) from shelves...",
       "resettingFableProgress": "Resetting Fable progress for {{ count }} book(s)...",
-      "resettingKOReaderProgress": "Resetting KOReader progress for {{ count }} book(s)..."
+      "resettingKOReaderProgress": "Resetting KOReader progress for {{ count }} book(s)...",
+      "sendingToStaging": "Sending {{ count }} book(s) to Staging..."
     }
   },
   "shelfMenuService": {

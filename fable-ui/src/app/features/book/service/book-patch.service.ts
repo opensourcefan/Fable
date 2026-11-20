@@ -1,7 +1,7 @@
 import {inject, Injectable, Injector} from '@angular/core';
 import {HttpClient, HttpParams} from '@angular/common/http';
-import {Observable, Subject} from 'rxjs';
-import {distinctUntilChanged, exhaustMap, share, tap} from 'rxjs/operators';
+import {Observable, Subject, from, of} from 'rxjs';
+import {concatMap, distinctUntilChanged, exhaustMap, reduce, share, tap} from 'rxjs/operators';
 import {Book, BookFileProgress, ReadStatus} from '../model/book.model';
 import {BookStateService} from './book-state.service';
 import {API_CONFIG} from '../../../core/config/api-config';
@@ -90,25 +90,47 @@ export class BookPatchService {
     );
   }
 
-  releaseFromStaging(bookIds: Set<number | undefined>): Observable<Book[]> {
-    const requestPayload = {
-      bookIds: Array.from(bookIds).filter((id): id is number => id != null),
-    };
-    return this.http.post<Book[]>(`${this.url}/staging/release`, requestPayload).pipe(
-      tap(updatedBooks => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        if (currentState.books && updatedBooks.length > 0) {
-          const updatedBookMap = new Map(updatedBooks.map(b => [b.id, b]));
-          const newBooks = currentState.books.map(book => updatedBookMap.get(book.id) ?? book);
-          this.bookStateService.updateBookState({...currentState, books: newBooks});
-          this.syncPagedBrowsersAfterStateMutation();
-        }
+  private static readonly STAGING_BATCH_SIZE = 500;
 
-        if (updatedBooks.length > 0) {
-          this.sidebarBadgeRefresh.requestRefresh();
-        }
-      })
+  releaseFromStaging(bookIds: Set<number | undefined>): Observable<Book[]> {
+    return this.executeChunkedStagingMutation(`${this.url}/staging/release`, bookIds);
+  }
+
+  stageForReview(bookIds: Set<number | undefined>): Observable<Book[]> {
+    return this.executeChunkedStagingMutation(`${this.url}/staging/stage`, bookIds);
+  }
+
+  private executeChunkedStagingMutation(endpoint: string, bookIds: Set<number | undefined>): Observable<Book[]> {
+    const validIds = Array.from(bookIds).filter((id): id is number => id != null);
+    if (validIds.length === 0) {
+      return of([]);
+    }
+
+    const chunks: number[][] = [];
+    for (let i = 0; i < validIds.length; i += BookPatchService.STAGING_BATCH_SIZE) {
+      chunks.push(validIds.slice(i, i + BookPatchService.STAGING_BATCH_SIZE));
+    }
+
+    return from(chunks).pipe(
+      concatMap(chunk => this.http.post<Book[]>(endpoint, {bookIds: chunk}).pipe(
+        tap(updatedBooks => this.applyUpdatedBooksToState(updatedBooks))
+      )),
+      reduce((allBooks, chunkBooks) => allBooks.concat(chunkBooks), [] as Book[])
     );
+  }
+
+  private applyUpdatedBooksToState(updatedBooks: Book[]): void {
+    const currentState = this.bookStateService.getCurrentBookState();
+    if (currentState.books && updatedBooks.length > 0) {
+      const updatedBookMap = new Map(updatedBooks.map(b => [b.id, b]));
+      const newBooks = currentState.books.map(book => updatedBookMap.get(book.id) ?? book);
+      this.bookStateService.updateBookState({...currentState, books: newBooks});
+      this.syncPagedBrowsersAfterStateMutation();
+    }
+
+    if (updatedBooks.length > 0) {
+      this.sidebarBadgeRefresh.requestRefresh();
+    }
   }
 
   private syncPagedBrowsersAfterStateMutation(): void {

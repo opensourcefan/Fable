@@ -24,7 +24,7 @@
     <p-popover #sectionVisibilityPop [dismissable]="true" appendTo="body" styleClass="sidebar-section-selector-popover">
       <div class="section-selector-list">
         <div class="section-selector-group-title">{{ t('homeItems') }}</div>
-        @for (option of homeItemOptions; track option.key) {
+        @for (option of visibleHomeItemOptions; track option.key) {
           <div class="section-selector-item">
             <p-checkbox
               [inputId]="'home-item-toggle-' + option.key"

@@ -1065,10 +1065,12 @@ export class BookBrowserComponent implements OnInit, AfterViewInit, OnDestroy {
 
           if (this.stagingTriageMode === 'review' && this.pendingReviewCount === 0) {
             this.stagingTriageMode = 'staging';
+            this.bookSelectionService?.deselectAll();
             this.syncStagingTriageModeQuery('staging');
           }
           if (this.stagingTriageMode === 'completed' && this.stagingCompletedCount === 0) {
             this.stagingTriageMode = 'staging';
+            this.bookSelectionService?.deselectAll();
             this.syncStagingTriageModeQuery('staging');
           }
 
@@ -1111,6 +1113,7 @@ export class BookBrowserComponent implements OnInit, AfterViewInit, OnDestroy {
     if (this.stagingTriageMode === mode) {
       return;
     }
+    this.bookSelectionService?.deselectAll();
     this.stagingTriageMode = mode;
     this.syncStagingTriageModeQuery(mode);
     this.lastStagingTriageSignature = '';
@@ -2363,10 +2366,38 @@ export class BookBrowserComponent implements OnInit, AfterViewInit, OnDestroy {
     if (this.entityType !== EntityType.STAGING || this.selectedBooks.size === 0) {
       return;
     }
-    const count = this.selectedBooks.size;
+    const idsToRelease = new Set(this.selectedBooks);
+    if (this.hasHiddenSelections) {
+      this.confirmationService.confirm({
+        message: this.t.translate('book.browser.confirm.releaseHiddenMessage', {
+          count: idsToRelease.size,
+          hiddenCount: this.hiddenSelectedCount,
+        }),
+        header: this.t.translate('book.browser.confirm.releaseHiddenHeader'),
+        icon: 'pi pi-exclamation-triangle',
+        acceptLabel: this.t.translate('book.browser.labels.release'),
+        rejectLabel: this.t.translate('common.cancel'),
+        acceptButtonProps: {
+          label: this.t.translate('book.browser.labels.release'),
+          severity: 'warn',
+        },
+        rejectButtonProps: {
+          label: this.t.translate('common.cancel'),
+          severity: 'secondary',
+        },
+        accept: () => this.executeReleaseFromStaging(idsToRelease),
+      });
+      return;
+    }
+
+    this.executeReleaseFromStaging(idsToRelease);
+  }
+
+  private executeReleaseFromStaging(idsToRelease: Set<number>): void {
+    const count = idsToRelease.size;
     this.writeProgressService.show(this.t.translate('book.browser.loading.releasingFromStaging', {count}));
 
-    this.bookService.releaseFromStaging(this.selectedBooks)
+    this.bookService.releaseFromStaging(idsToRelease)
       .subscribe({
         next: () => {
           this.writeProgressService.complete(this.t.translate('book.browser.toast.releaseFromStagingSuccessDetail'));
@@ -2375,14 +2406,15 @@ export class BookBrowserComponent implements OnInit, AfterViewInit, OnDestroy {
             summary: this.t.translate('common.success'),
             detail: this.t.translate('book.browser.toast.releaseFromStagingSuccessDetail'),
           });
-          this.pagedBookBrowserStateService.invalidateEntity('STAGING');
-          void this.bookService.refreshBooks().subscribe();
           this.bookSelectionService.deselectAll();
           this.refreshStagingTriage();
-          this.applySortCriteria(this.getEffectiveSortCriteria(this.bookSorter.selectedSortCriteria));
+          this.rebuildStagingBookState();
         },
         error: () => {
           this.writeProgressService.fail(this.t.translate('book.browser.toast.releaseFromStagingFailedDetail'));
+          // Sync UI in case an earlier 500-ID chunk succeeded before the error.
+          this.refreshStagingTriage();
+          this.rebuildStagingBookState();
         }
       });
   }

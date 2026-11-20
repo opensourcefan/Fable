@@ -224,6 +224,23 @@ describe('AppMenuComponent reorder mode', () => {
     subscription?.unsubscribe();
   });
 
+  it('hides staging from home menu and visibility options for non-editor users', async () => {
+    const userService = TestBed.inject(UserService) as unknown as {getCurrentUser: () => unknown};
+    vi.spyOn(userService, 'getCurrentUser').mockReturnValue({
+      permissions: {admin: false, canEditMetadata: false},
+    });
+    getBooksCount.mockClear();
+
+    component.ngOnInit();
+
+    const menu = await firstValueFrom(component.homeMenu$!);
+    const items = menu[0].items ?? [];
+
+    expect(items.some(item => item.routerLink?.[0] === '/staging')).toBe(false);
+    expect(component.visibleHomeItemOptions.some(opt => opt.key === 'staging')).toBe(false);
+    expect(getBooksCount).not.toHaveBeenCalledWith({staged: true});
+  });
+
   it('adds the dashboard settings end action to the dashboard row', async () => {
     component.ngOnInit();
 
