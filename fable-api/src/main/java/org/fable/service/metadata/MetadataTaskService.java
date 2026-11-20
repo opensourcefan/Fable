@@ -174,7 +174,7 @@ public class MetadataTaskService {
     }
 
     private static boolean isStagingCompleted(BookEntity book) {
-        if (book.getLastMetadataFetchAt() != null) {
+        if (book.getStagingCompletedAt() != null) {
             return true;
         }
         BookMetadataEntity metadata = book.getMetadata();
@@ -380,16 +380,27 @@ public class MetadataTaskService {
                 .orElse(false);
     }
 
+    @Transactional
     public boolean updateProposalStatus(String taskId, Long proposalId, String statusStr) {
         Long userId = authenticationService.getAuthenticatedUser().getId();
         Optional<FetchedMetadataProposalStatus> statusOpt = parseStatus(statusStr);
         return statusOpt.map(fetchedMetadataProposalStatus -> proposalRepository.findById(proposalId)
                 .filter(p -> p.getJob() != null && taskId.equals(p.getJob().getTaskId()))
                 .map(proposal -> {
+                    Instant now = Instant.now();
                     proposal.setStatus(fetchedMetadataProposalStatus);
-                    proposal.setReviewedAt(Instant.now());
+                    proposal.setReviewedAt(now);
                     proposal.setReviewerUserId(userId);
                     proposalRepository.save(proposal);
+                    if (fetchedMetadataProposalStatus == FetchedMetadataProposalStatus.ACCEPTED && proposal.getBookId() != null) {
+                        bookRepository.findById(proposal.getBookId()).ifPresent(book -> {
+                            book.setLastMetadataFetchAt(now);
+                            if (Boolean.TRUE.equals(book.getStaged())) {
+                                book.setStagingCompletedAt(now);
+                            }
+                            bookRepository.save(book);
+                        });
+                    }
                     return true;
                 })
                 .orElse(false)).orElse(false);

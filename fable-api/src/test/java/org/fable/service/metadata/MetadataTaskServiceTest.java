@@ -214,10 +214,11 @@ class MetadataTaskServiceTest {
             task.setProposals(List.of(stagedProposal, releasedProposal));
 
             BookEntity stagedReviewBook = buildBook(100L, "Review", "review.epub");
-            stagedReviewBook.setLastMetadataFetchAt(Instant.now());
+            stagedReviewBook.setStagingCompletedAt(Instant.now());
             BookEntity completedBook = buildBook(300L, "Completed", "completed.epub");
-            completedBook.setLastMetadataFetchAt(Instant.now());
+            completedBook.setStagingCompletedAt(Instant.now());
             BookEntity inboxBook = buildBook(400L, "Inbox", "inbox.epub");
+            inboxBook.setLastMetadataFetchAt(Instant.now()); // Fetch attempt alone without stagingCompletedAt stays in inbox
 
             when(proposalRepository.findAllByStatusWithJob(FetchedMetadataProposalStatus.FETCHED))
                     .thenReturn(List.of(stagedProposal, releasedProposal));
@@ -339,8 +340,11 @@ class MetadataTaskServiceTest {
 
             MetadataFetchJobEntity job = buildTask("t1", MetadataFetchTaskStatus.COMPLETED, new ArrayList<>());
             MetadataFetchProposalEntity proposal = buildProposal(10L, job, FetchedMetadataProposalStatus.FETCHED);
+            BookEntity stagedBook = buildBook(100L, "Staged", "staged.epub");
+            stagedBook.setStaged(true);
 
             when(proposalRepository.findById(10L)).thenReturn(Optional.of(proposal));
+            when(bookRepository.findById(100L)).thenReturn(Optional.of(stagedBook));
 
             boolean result = service.updateProposalStatus("t1", 10L, "ACCEPTED");
 
@@ -348,7 +352,10 @@ class MetadataTaskServiceTest {
             assertThat(proposal.getStatus()).isEqualTo(FetchedMetadataProposalStatus.ACCEPTED);
             assertThat(proposal.getReviewerUserId()).isEqualTo(userId);
             assertThat(proposal.getReviewedAt()).isNotNull();
+            assertThat(stagedBook.getStagingCompletedAt()).isNotNull();
+            assertThat(stagedBook.getLastMetadataFetchAt()).isNotNull();
             verify(proposalRepository).save(proposal);
+            verify(bookRepository).save(stagedBook);
         }
 
         @Test

@@ -435,6 +435,7 @@ public class MetadataRefreshService {
                 return;
             }
 
+            boolean metadataApplied = false;
             if (plan.reviewMode()) {
                 if (!noProviderReturnedData) {
                     saveProposal(task, book.getId(), fetched);
@@ -447,12 +448,21 @@ public class MetadataRefreshService {
                         : MetadataReplaceMode.REPLACE_MISSING;
                 if (noProviderReturnedData && replaceMode == MetadataReplaceMode.REPLACE_ALL) {
                     log.warn("No metadata returned by any provider for book {} in REPLACE_ALL mode; refusing to wipe existing metadata.", getBookIdentifier(book));
+                } else if (noProviderReturnedData) {
+                    log.info("No metadata returned by providers for book {}; skipping metadata apply and completion stamp.", getBookIdentifier(book));
                 } else {
                     updateBookMetadata(book, fetched, plan.refreshOptions().isRefreshCovers(), plan.refreshOptions().isMergeCategories(), replaceMode);
+                    metadataApplied = true;
                 }
             }
 
-            book.setLastMetadataFetchAt(Instant.now());
+            if (metadataApplied) {
+                Instant now = Instant.now();
+                book.setLastMetadataFetchAt(now);
+                if (Boolean.TRUE.equals(book.getStaged())) {
+                    book.setStagingCompletedAt(now);
+                }
+            }
 
             markBookCompleted(task, bookId);
 

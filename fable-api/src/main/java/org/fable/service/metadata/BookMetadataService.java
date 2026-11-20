@@ -250,6 +250,9 @@ public class BookMetadataService {
                 .build();
 
         bookMetadataUpdater.setBookMetadata(context);
+        if (Boolean.TRUE.equals(bookEntity.getStaged()) && !isFollowUpTagOnlyUpdate(metadataUpdateWrapper)) {
+            bookEntity.setStagingCompletedAt(java.time.Instant.now());
+        }
         bookRepository.save(bookEntity);
         return bookMapper.toBookWithDescription(bookEntity, true);
     }
@@ -349,6 +352,9 @@ public class BookMetadataService {
                     .build();
 
             bookMetadataUpdater.setBookMetadata(context);
+            if (Boolean.TRUE.equals(book.getStaged()) && !isFollowUpTagOnlyUpdate(context.getMetadataUpdateWrapper())) {
+                book.setStagingCompletedAt(java.time.Instant.now());
+            }
             return bookMapper.toBookWithDescription(book, true);
         });
     }
@@ -410,9 +416,45 @@ public class BookMetadataService {
         });
     }
 
+    private static final String METADATA_FOLLOW_UP_TAG = "Metadata Follow-Up Req";
+
+    private boolean isFollowUpTagOnlyUpdate(MetadataUpdateWrapper wrapper) {
+        if (wrapper == null || wrapper.getMetadata() == null) {
+            return false;
+        }
+        BookMetadata m = wrapper.getMetadata();
+        if (m.getTags() == null || !m.getTags().contains(METADATA_FOLLOW_UP_TAG)) {
+            return false;
+        }
+        MetadataClearFlags cf = wrapper.getClearFlags();
+        if (cf != null && (cf.isTitle() || cf.isSubtitle() || cf.isPublisher() || cf.isPublishedDate()
+                || cf.isDescription() || cf.isSeriesName() || cf.isSeriesNumber() || cf.isSeriesTotal()
+                || cf.isIsbn13() || cf.isIsbn10() || cf.isPageCount() || cf.isLanguage()
+                || cf.isAuthors() || cf.isCategories() || cf.isMoods() || cf.isTags())) {
+            return false;
+        }
+        return m.getTitle() == null
+                && m.getSubtitle() == null
+                && m.getPublisher() == null
+                && m.getPublishedDate() == null
+                && m.getDescription() == null
+                && m.getSeriesName() == null
+                && m.getSeriesNumber() == null
+                && m.getSeriesTotal() == null
+                && m.getIsbn13() == null
+                && m.getIsbn10() == null
+                && m.getPageCount() == null
+                && m.getLanguage() == null
+                && m.getThumbnailUrl() == null
+                && (m.getAuthors() == null || m.getAuthors().isEmpty())
+                && (m.getCategories() == null || m.getCategories().isEmpty())
+                && (m.getMoods() == null || m.getMoods().isEmpty());
+    }
+
     private void wipeBookMetadata(BookEntity book) {
         BookMetadataEntity metadata = book.getMetadata();
         book.setLastMetadataFetchAt(null);
+        book.setStagingCompletedAt(null);
         book.setIsbnDiscoveryStatus(null);
         book.setIsbnDiscoveryCheckedAt(null);
         book.setIsbnDiscoveryDetail(null);

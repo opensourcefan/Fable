@@ -5,6 +5,7 @@ import org.fable.mapper.BookMapper;
 import org.fable.mapper.BookMetadataMapper;
 import org.fable.mapper.MetadataClearFlagsMapper;
 import org.fable.model.MetadataClearFlags;
+import org.fable.model.MetadataUpdateWrapper;
 import org.fable.model.dto.Book;
 import org.fable.model.dto.BookMetadata;
 import org.fable.model.dto.request.BulkMetadataUpdateRequest;
@@ -684,6 +685,7 @@ class BookMetadataServiceTest {
                                         .id(1L)
                                         .staged(true)
                                         .lastMetadataFetchAt(java.time.Instant.parse("2026-07-20T12:00:00Z"))
+                                        .stagingCompletedAt(java.time.Instant.parse("2026-07-20T12:00:00Z"))
                                         .isbnDiscoveryStatus(org.fable.model.enums.IsbnDiscoveryStatus.ERROR)
                                         .isbnDiscoveryCheckedAt(java.time.Instant.parse("2026-07-20T11:00:00Z"))
                                         .isbnDiscoveryDetail("OCR unavailable")
@@ -698,12 +700,47 @@ class BookMetadataServiceTest {
                         service.wipeBookMetadata(1L);
 
                         assertThat(bookEntity.getLastMetadataFetchAt()).isNull();
+                        assertThat(bookEntity.getStagingCompletedAt()).isNull();
                         assertThat(bookEntity.getIsbnDiscoveryStatus()).isNull();
                         assertThat(bookEntity.getIsbnDiscoveryCheckedAt()).isNull();
                         assertThat(bookEntity.getIsbnDiscoveryDetail()).isNull();
                         assertThat(metadataEntity.getIsbnVerified()).isFalse();
                         assertThat(metadataEntity.getIsbnWrittenToFile()).isFalse();
                         assertThat(bookEntity.getStaged()).isTrue();
+                }
+
+                @Test
+                void updateMetadata_stampsStagingCompletedAtForManualEditButSkipsFollowUpTagOnly() {
+                        BookEntity stagedBook = BookEntity.builder()
+                                        .id(10L)
+                                        .staged(true)
+                                        .metadata(BookMetadataEntity.builder().bookId(10L).title("Old").build())
+                                        .build();
+                        when(bookQueryService.findAllWithMetadataByIds(Collections.singleton(10L)))
+                                        .thenReturn(List.of(stagedBook));
+                        when(bookMapper.toBookWithDescription(stagedBook, true)).thenReturn(Book.builder().id(10L).build());
+
+                        MetadataUpdateWrapper followUpOnly = MetadataUpdateWrapper.builder()
+                                        .metadata(BookMetadata.builder()
+                                                        .bookId(10L)
+                                                        .tags(Set.of("Metadata Follow-Up Req"))
+                                                        .build())
+                                        .clearFlags(new MetadataClearFlags())
+                                        .build();
+                        service.updateMetadata(10L, followUpOnly, false, org.fable.model.enums.MetadataReplaceMode.REPLACE_WHEN_PROVIDED);
+                        assertThat(stagedBook.getStagingCompletedAt()).isNull();
+                        assertThat(stagedBook.getLastMetadataFetchAt()).isNull();
+
+                        MetadataUpdateWrapper manualEdit = MetadataUpdateWrapper.builder()
+                                        .metadata(BookMetadata.builder()
+                                                        .bookId(10L)
+                                                        .title("Edited Title")
+                                                        .build())
+                                        .clearFlags(new MetadataClearFlags())
+                                        .build();
+                        service.updateMetadata(10L, manualEdit, false, org.fable.model.enums.MetadataReplaceMode.REPLACE_WHEN_PROVIDED);
+                        assertThat(stagedBook.getStagingCompletedAt()).isNotNull();
+                        assertThat(stagedBook.getLastMetadataFetchAt()).isNull();
                 }
 
                 @Test

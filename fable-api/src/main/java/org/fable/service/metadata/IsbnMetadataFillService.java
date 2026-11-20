@@ -389,7 +389,11 @@ public class IsbnMetadataFillService {
                 .forceFileWrite(writeBack)
                 .build();
         bookMetadataUpdater.setBookMetadata(context);
-        book.setLastMetadataFetchAt(java.time.Instant.now());
+        java.time.Instant now = java.time.Instant.now();
+        book.setLastMetadataFetchAt(now);
+        if (Boolean.TRUE.equals(book.getStaged())) {
+            book.setStagingCompletedAt(now);
+        }
         bookRepository.save(book);
 
         Book updated = bookMapper.toBookWithDescription(book, true);

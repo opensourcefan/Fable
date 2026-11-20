@@ -102,6 +102,9 @@ public class BookEntity {
     @Builder.Default
     private Boolean staged = Boolean.FALSE;
 
+    @Column(name = "staging_completed_at")
+    private Instant stagingCompletedAt;
+
     @Column(name = "file_type", length = 120)
     private String fileType;
 
