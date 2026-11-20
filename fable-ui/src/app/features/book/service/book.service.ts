@@ -481,23 +481,11 @@ export class BookService {
   }
 
   releaseFromStaging(bookIds: Set<number | undefined>): Observable<Book[]> {
-    return this.bookPatchService.releaseFromStaging(bookIds).pipe(
-      catchError(error => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        this.bookStateService.updateBookState({...currentState, error: error.message});
-        throw error;
-      })
-    );
+    return this.bookPatchService.releaseFromStaging(bookIds);
   }
 
   stageForReview(bookIds: Set<number | undefined>): Observable<Book[]> {
-    return this.bookPatchService.stageForReview(bookIds).pipe(
-      catchError(error => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        this.bookStateService.updateBookState({...currentState, error: error.message});
-        throw error;
-      })
-    );
+    return this.bookPatchService.stageForReview(bookIds);
   }
 
   updateFileType(bookIds: Set<number | undefined>, fileType: string | null): Observable<Book[]> {

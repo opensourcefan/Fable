@@ -10,6 +10,7 @@ import org.fable.model.entity.ComicMetadataEntity;
 import org.fable.model.entity.LibraryEntity;
 import org.fable.model.entity.LibraryPathEntity;
 import org.fable.model.enums.BookFileType;
+import org.fable.model.enums.FetchedMetadataProposalStatus;
 import org.hibernate.Hibernate;
 import org.fable.service.task.TaskCronService;
 import org.junit.jupiter.api.Test;
@@ -89,6 +90,9 @@ class BookRepositorySummaryMetadataDataJpaTest {
     @Autowired
     private BookRepository bookRepository;
 
+    @Autowired
+    private MetadataFetchProposalRepository proposalRepository;
+
     @Test
     void findAllWithSummaryMetadataByIds_keepsDescriptionAndComicMetadataLazy() {
         long bookId = persistBookWithDescriptionAndComicMetadata();
@@ -104,6 +108,31 @@ class BookRepositorySummaryMetadataDataJpaTest {
 
         assertThat(book.getMetadata().getDescription()).isEqualTo("A very long description that should stay lazy in summary queries.");
         assertThat(Hibernate.isPropertyInitialized(book.getMetadata(), "description")).isTrue();
+    }
+
+    @Test
+    void updateStatusByBookIdsAndStatus_doesNotDetachLoadedBookMetadataDescription() {
+        long bookId = persistBookWithDescriptionAndComicMetadata();
+
+        entityManager.flush();
+        entityManager.clear();
+
+        BookEntity book = bookRepository.findAllWithMetadataByIds(Set.of(bookId)).getFirst();
+        book.setStaged(false);
+        book.setStagingCompletedAt(null);
+        bookRepository.saveAll(List.of(book));
+
+        proposalRepository.updateStatusByBookIdsAndStatus(
+                Set.of(bookId),
+                FetchedMetadataProposalStatus.FETCHED,
+                FetchedMetadataProposalStatus.REJECTED,
+                Instant.now(),
+                1L
+        );
+
+        assertThat(entityManager.contains(book)).isTrue();
+        assertThat(book.getMetadata().getDescription())
+                .isEqualTo("A very long description that should stay lazy in summary queries.");
     }
 
     private long persistBookWithDescriptionAndComicMetadata() {

@@ -23,7 +23,7 @@ public interface MetadataFetchProposalRepository extends JpaRepository<MetadataF
             """)
     List<MetadataFetchProposalEntity> findAllByStatusWithJob(@Param("status") FetchedMetadataProposalStatus status);
 
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Modifying(flushAutomatically = true)
     @Query("""
             update MetadataFetchProposalEntity p
             set p.status = :newStatus,
