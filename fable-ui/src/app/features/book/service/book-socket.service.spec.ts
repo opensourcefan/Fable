@@ -308,4 +308,24 @@ describe('BookSocketService', () => {
     expect(syncCacheSpy).toHaveBeenCalledTimes(1);
     expect(refreshActiveStateSpy).toHaveBeenCalledTimes(1);
   });
+
+  it('emits bookCatalogChanges$ events when books are created or removed without affecting bookUpdates$', () => {
+    const {socketService} = createServices();
+    const catalogEvents: unknown[] = [];
+    const updateEvents: unknown[] = [];
+
+    socketService.bookCatalogChanges$.subscribe(event => catalogEvents.push(event));
+    socketService.bookUpdates$.subscribe(event => updateEvents.push(event));
+
+    const createdBook = {...createBook(88, 'Staged Import', 1), staged: true};
+    socketService.handleNewlyCreatedBook(createdBook);
+    socketService.handleRemovedBookIds([88]);
+    socketService.handleRemovedBookIds([]);
+
+    expect(catalogEvents).toEqual([
+      {type: 'created', book: createdBook},
+      {type: 'removed', bookIds: [88]},
+    ]);
+    expect(updateEvents).toEqual([]);
+  });
 });

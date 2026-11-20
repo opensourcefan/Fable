@@ -45,7 +45,7 @@
                   } @else if (entityType === EntityType.NOT_SHELFED) {
                     {{ (isFilterActive || hasSearchTerm) ? t('labels.unshelvedBooksFiltered') : t('labels.unshelvedBooks') }}
                   } @else if (entityType === EntityType.STAGING) {
-                    {{ t('labels.stagingBooks') }}
+                    {{ (isFilterActive || hasSearchTerm) ? t('labels.stagingBooksFiltered') : t('labels.stagingBooks') }}
                   } @else {
                     {{ entityType }}: {{ (entity$ | async)?.name }}{{ (isFilterActive || hasSearchTerm) ? ' ' + t('labels.filteredSuffix') : '' }}
                   }
@@ -825,7 +825,7 @@
           @if (bookState?.error) {
             <div class="no-books-container">
               <p class="no-books-text">
-                {{ entityType === EntityType.LIBRARY ? t('labels.failedLibrary') : t('labels.failedShelf') }}
+                {{ entityType === EntityType.LIBRARY ? t('labels.failedLibrary') : (entityType === EntityType.STAGING ? t('labels.failedStaging') : t('labels.failedShelf')) }}
               </p>
             </div>
           }
@@ -839,7 +839,7 @@
           @if (!bookState?.error && bookState?.loaded && bookState?.books?.length === 0 && !isWaitingForDirectorySelection && activeDirFilterPath === null) {
             <div class="no-books-container">
               <p class="no-books-text">
-                {{ t('labels.noBooks') }}
+                {{ entityType === EntityType.STAGING ? t('labels.noStagingBooks') : t('labels.noBooks') }}
               </p>
             </div>
           }
@@ -856,6 +856,9 @@
                   [showSubtitle]="showSubtitles"
                   [forceFileNameTitle]="isDirectoryScopedView"
                   [pagedPilotActive]="isPagedPilotActive"
+                  [reviewActionEnabled]="entityType === EntityType.STAGING && stagingTriageMode === 'review'"
+                  [showStagingIsbnProblem]="entityType === EntityType.STAGING && stagingTriageMode === 'staging'"
+                  (reviewRequested)="openBookMetadataReview($event)"
                 ></app-book-table>
               }
               @if (currentViewMode === 'grid') {
@@ -945,25 +948,26 @@
   <div
     class="staging-triage-tabs"
     [class.staging-triage-tabs--phone-row]="isMobile"
-    role="tablist"
+    role="group"
     [attr.aria-label]="t('labels.stagingTriage')">
     <button
       type="button"
-      role="tab"
       class="staging-triage-tab staging-triage-tab--staged"
       [class.staging-triage-tab--active]="stagingTriageMode === 'staging'"
-      [attr.aria-selected]="stagingTriageMode === 'staging'"
+      [attr.aria-pressed]="stagingTriageMode === 'staging'"
       (click)="setStagingTriageMode('staging')">
       <span class="staging-triage-label">{{ t('labels.stagingTab') }}</span>
       <span class="staging-triage-badge">{{ stagingInboxCount }}</span>
     </button>
     <button
       type="button"
-      role="tab"
       class="staging-triage-tab staging-triage-tab--review"
       [class.staging-triage-tab--active]="stagingTriageMode === 'review'"
-      [attr.aria-selected]="stagingTriageMode === 'review'"
+      [attr.aria-pressed]="stagingTriageMode === 'review'"
       [disabled]="pendingReviewCount === 0"
+      [pTooltip]="stagingTriageMode === 'review' ? t('tooltip.reviewTabOpenDialog') : t('tooltip.forReview')"
+      [tooltipDisabled]="isMobile || pendingReviewCount === 0"
+      tooltipPosition="top"
       (click)="setStagingTriageMode('review')">
       <span class="staging-triage-label">{{ t('labels.reviewTab') }}</span>
       <span class="staging-triage-badge">{{ pendingReviewCount }}</span>
@@ -971,10 +975,9 @@
     <span class="staging-triage-separator" aria-hidden="true"></span>
     <button
       type="button"
-      role="tab"
       class="staging-triage-tab staging-triage-tab--completed"
       [class.staging-triage-tab--active]="stagingTriageMode === 'completed'"
-      [attr.aria-selected]="stagingTriageMode === 'completed'"
+      [attr.aria-pressed]="stagingTriageMode === 'completed'"
       [disabled]="stagingCompletedCount === 0"
       (click)="setStagingTriageMode('completed')">
       <span class="staging-triage-label">{{ t('labels.completedTab') }}</span>

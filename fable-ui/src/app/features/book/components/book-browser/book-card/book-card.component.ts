@@ -396,6 +396,22 @@ export class BookCardComponent implements OnInit, OnChanges, AfterViewInit, OnDe
     return [title, detail, checkedAt].filter(Boolean).join(' — ');
   }
 
+  onStagingIsbnProblemClick(event: Event): void {
+    event.stopPropagation();
+    const status = this.stagingIsbnProblemStatus;
+    if (!status) {
+      return;
+    }
+    this.messageService.add({
+      severity: status === IsbnDiscoveryStatus.ERROR ? 'error' : 'warn',
+      summary: this.t.translate(status === IsbnDiscoveryStatus.NOT_FOUND
+        ? 'book.card.isbnDiscoveryStatus.notFound'
+        : 'book.card.isbnDiscoveryStatus.error'),
+      detail: this.stagingIsbnProblemTooltip,
+      life: 5000,
+    });
+  }
+
   /**
    * Long-press range multiselect + selection-tap behavior.
    * Preserves the existing phone geometry path; also enables for tablet/desktop

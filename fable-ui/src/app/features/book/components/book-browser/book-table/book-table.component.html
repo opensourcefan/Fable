@@ -108,6 +108,38 @@
             <td
               [title]="getCellValue(metadata, book, col.field)"
               class="cell-text">
+              @if (col.field === 'title' && (isReviewActionEnabled || getStagingIsbnProblemStatus(book))) {
+                <span class="table-staging-inline-actions">
+                  @if (getStagingIsbnProblemStatus(book); as isbnStatus) {
+                    <button
+                      type="button"
+                      class="table-isbn-problem-badge"
+                      [class.table-isbn-problem-badge--not-found]="isbnStatus === 'NOT_FOUND'"
+                      [class.table-isbn-problem-badge--error]="isbnStatus === 'ERROR'"
+                      [pTooltip]="getStagingIsbnProblemTooltip(book)"
+                      tooltipPosition="top"
+                      [attr.aria-label]="getStagingIsbnProblemTooltip(book)"
+                      (click)="onStagingIsbnProblemClick($event, book)">
+                      <i
+                        class="pi"
+                        [class.pi-barcode]="isbnStatus === 'NOT_FOUND'"
+                        [class.pi-exclamation-triangle]="isbnStatus === 'ERROR'"
+                        aria-hidden="true"></i>
+                    </button>
+                  }
+                  @if (isReviewActionEnabled) {
+                    <button
+                      type="button"
+                      class="table-review-btn"
+                      [pTooltip]="reviewTooltip"
+                      tooltipPosition="top"
+                      [attr.aria-label]="reviewTooltip"
+                      (click)="onReviewActionClick($event, book)">
+                      <i class="pi pi-info-circle" aria-hidden="true"></i>
+                    </button>
+                  }
+                </span>
+              }
               @if(['title', 'authors', 'publisher', 'seriesName', 'categories', 'language'].includes(col.field)) {
                 @for (item of getCellClickableValue(metadata, book, col.field); track $index; let isLast = $last) {
                   <a [routerLink]="item.url" class="cell-link">

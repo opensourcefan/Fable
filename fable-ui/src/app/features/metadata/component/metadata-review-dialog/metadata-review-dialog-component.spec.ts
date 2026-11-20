@@ -250,4 +250,30 @@ describe('MetadataReviewDialogComponent', () => {
     expect(notificationEventServiceMock.clearNotification).toHaveBeenCalled();
     expect(dialogRefMock.close).toHaveBeenCalled();
   });
+
+  it('skips proposals whose books are missing from loaded book state instead of hanging on loading', () => {
+    const bookService = TestBed.inject(BookService) as unknown as {
+      bookState$: BehaviorSubject<{loaded: boolean; books: Book[] | null}>;
+    };
+    bookService.bookState$.next({loaded: true, books: [createBook(11), createBook(33)]});
+
+    const {component} = createComponent();
+
+    expect(component.loading).toBe(false);
+    expect(component.proposals.map(proposal => proposal.bookId)).toEqual([11, 33]);
+    expect(dialogRefMock.close).not.toHaveBeenCalled();
+  });
+
+  it('closes cleanly when no proposal books exist in loaded book state', () => {
+    const bookService = TestBed.inject(BookService) as unknown as {
+      bookState$: BehaviorSubject<{loaded: boolean; books: Book[] | null}>;
+    };
+    bookService.bookState$.next({loaded: true, books: []});
+
+    const fixture = TestBed.createComponent(MetadataReviewDialogComponent);
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.loading).toBe(false);
+    expect(dialogRefMock.close).toHaveBeenCalledOnce();
+  });
 });

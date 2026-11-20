@@ -7,6 +7,10 @@ import {PagedGridPilotService} from './paged-grid-pilot.service';
 import {Subject} from 'rxjs';
 import {debounceTime} from 'rxjs/operators';
 
+export type BookCatalogChangeEvent =
+  | { type: 'created'; book: Book }
+  | { type: 'removed'; bookIds: number[] };
+
 @Injectable({
   providedIn: 'root',
 })
@@ -16,9 +20,12 @@ export class BookSocketService {
   private injector = inject(Injector);
   private syncGridSubject = new Subject<void>();
   private bookUpdatesSubject = new Subject<Book[]>();
+  private bookCatalogChangesSubject = new Subject<BookCatalogChangeEvent>();
 
   /** Full book updates that may change client-side views such as Staging triage. */
   readonly bookUpdates$ = this.bookUpdatesSubject.asObservable();
+  /** Newly created or removed book events so views like Staging stay live without reload. */
+  readonly bookCatalogChanges$ = this.bookCatalogChangesSubject.asObservable();
 
   constructor() {
     this.syncGridSubject.pipe(debounceTime(150)).subscribe(() => {
@@ -29,12 +36,14 @@ export class BookSocketService {
   handleNewlyCreatedBook(book: Book): void {
     this.bookStateService.upsertBookAndInvalidatePagedCaches(book);
     this.sidebarBadgeRefresh.requestRefresh();
+    this.bookCatalogChangesSubject.next({type: 'created', book});
   }
 
   handleRemovedBookIds(removedBookIds: number[]): void {
     this.bookStateService.removeBooksAndInvalidatePagedCaches(removedBookIds);
     if (removedBookIds.length > 0) {
       this.sidebarBadgeRefresh.requestRefresh();
+      this.bookCatalogChangesSubject.next({type: 'removed', bookIds: removedBookIds});
     }
   }
 

@@ -247,6 +247,7 @@ export class BookBrowserComponent implements OnInit, AfterViewInit, OnDestroy {
   private pendingReviewPrimaryTaskId: string | null = null;
   private pendingReviewTasks: PendingMetadataReviewTask[] = [];
   private lastStagingTriageSignature = '';
+  private readonly stagingTriageVersion$ = new BehaviorSubject<number>(0);
   aiSearchStatus: 'READY' | 'STARTING' | 'ERROR' = 'READY';
   isAiSearchActive = false;
   isAiSearchError = false;
@@ -1029,6 +1030,44 @@ export class BookBrowserComponent implements OnInit, AfterViewInit, OnDestroy {
         }
       });
 
+    this.bookSocketService.bookCatalogChanges$
+      .pipe(takeUntil(this.destroy$))
+      .subscribe(event => {
+        if (this.entityType !== EntityType.STAGING) {
+          return;
+        }
+        if (event.type === 'created' && event.book.staged) {
+          this.stagingInboxBookIds.add(event.book.id);
+          this.stagingInboxCount = this.stagingInboxBookIds.size;
+          this.lastStagingTriageSignature = '';
+          this.rebuildStagingBookState();
+          this.cdr.markForCheck();
+        } else if (event.type === 'removed') {
+          let changed = false;
+          for (const removedId of event.bookIds) {
+            if (this.stagingInboxBookIds.delete(removedId)) changed = true;
+            if (this.stagingCompletedBookIds.delete(removedId)) changed = true;
+            if (this.pendingReviewBookIds.delete(removedId)) changed = true;
+          }
+          if (changed) {
+            this.stagingInboxCount = this.stagingInboxBookIds.size;
+            this.stagingCompletedCount = this.stagingCompletedBookIds.size;
+            this.pendingReviewCount = this.pendingReviewBookIds.size;
+            this.lastStagingTriageSignature = '';
+            this.rebuildStagingBookState();
+            this.cdr.markForCheck();
+          }
+        }
+      });
+
+    this.bookSocketService.bookCatalogChanges$
+      .pipe(debounceTime(150), takeUntil(this.destroy$))
+      .subscribe(() => {
+        if (this.entityType === EntityType.STAGING) {
+          this.refreshStagingTriage();
+        }
+      });
+
     this.metadataProgressService.progressUpdates$
       .pipe(takeUntil(this.destroy$))
       .subscribe(progress => {
@@ -1090,8 +1129,15 @@ export class BookBrowserComponent implements OnInit, AfterViewInit, OnDestroy {
           }
           this.cdr.markForCheck();
         },
-        error: () => {
-          // Non-fatal: triage badges stay stale until next refresh.
+        error: (err: {status?: number}) => {
+          if (this.entityType === EntityType.STAGING && err?.status !== 401 && err?.status !== 403) {
+            this.messageService?.add({
+              severity: 'warn',
+              summary: this.t.translate('book.browser.toast.stagingTriageRefreshFailedSummary'),
+              detail: this.t.translate('book.browser.toast.stagingTriageRefreshFailedDetail'),
+              life: 4000,
+            });
+          }
         }
       });
   }
@@ -1127,6 +1173,7 @@ export class BookBrowserComponent implements OnInit, AfterViewInit, OnDestroy {
    * Force Staging bookState$ to reconnect so triage mode / ID set changes are applied.
    */
   private rebuildStagingBookState(): void {
+    this.stagingTriageVersion$?.next((this.stagingTriageVersion$?.value ?? 0) + 1);
     if (this.entityType !== EntityType.STAGING || !this.currentViewMode) {
       return;
     }
@@ -1364,14 +1411,29 @@ export class BookBrowserComponent implements OnInit, AfterViewInit, OnDestroy {
     this.searchFilteredForSidebar$ = combineLatest([
       this.bookService.bookState$,
       this.searchTerm$,
+      this.stagingTriageVersion$,
     ]).pipe(
       switchMap(([state, term]) => {
         const trimmed = (term || '').trim();
-        if (trimmed.length < 2) {
-          return of(state.books || []);
-        }
-        return this.headerFilter.filter(state).pipe(
-          map(filtered => filtered.books || [])
+        const baseBooks$ = trimmed.length < 2
+          ? of(state.books || [])
+          : this.headerFilter.filter(state).pipe(
+              map(filtered => filtered.books || [])
+            );
+        return baseBooks$.pipe(
+          map(books => {
+            if (this.entityType !== EntityType.STAGING) {
+              return books;
+            }
+            const stagedOnly = books.filter(book => book.staged === true);
+            return filterBooksByStagingTriage(
+              stagedOnly,
+              this.stagingTriageMode,
+              this.stagingInboxBookIds,
+              this.stagingCompletedBookIds,
+              this.pendingReviewBookIds,
+            ) ?? [];
+          })
         );
       }),
       shareReplay({ bufferSize: 1, refCount: true }),

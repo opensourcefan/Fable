@@ -114,3 +114,40 @@
 ::ng-deep .cover-tooltip > .p-tooltip-text {
   padding: 0.25rem;
 }
+
+.table-staging-inline-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-right: 0.4rem;
+  vertical-align: middle;
+}
+
+.table-isbn-problem-badge,
+.table-review-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  color: #fff;
+  font-size: 0.72rem;
+}
+
+.table-isbn-problem-badge--not-found {
+  background: #ff5a00;
+  border-color: #6b2100;
+}
+
+.table-isbn-problem-badge--error {
+  background: #e0002b;
+  border-color: #4c0519;
+}
+
+.table-review-btn {
+  background: var(--p-primary-color, #3b82f6);
+}

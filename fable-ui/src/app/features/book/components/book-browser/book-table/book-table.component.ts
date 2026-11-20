@@ -2,7 +2,7 @@ import {AfterViewInit, ChangeDetectionStrategy, ChangeDetectorRef, Component, Ev
 import {Table, TableModule} from 'primeng/table';
 import {DatePipe, NgClass} from '@angular/common';
 import {TooltipModule} from "primeng/tooltip";
-import {Book, BookMetadata, ReadStatus} from '../../../model/book.model';
+import {Book, BookMetadata, IsbnDiscoveryStatus, ReadStatus} from '../../../model/book.model';
 import {SortOption} from '../../../model/sort.model';
 import {UrlHelperService} from '../../../../../shared/service/url-helper.service';
 import {Button} from 'primeng/button';
@@ -17,6 +17,7 @@ import {ReadStatusHelper} from '../../../helpers/read-status.helper';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 import {ScrollerOptions} from 'primeng/api';
 import {BookSelectionService} from '../book-selection.service';
+import {MobileUxService} from '../../../../../core/services/mobile-ux.service';
 
 export interface TableViewportMetrics {
   scrollTop: number;
@@ -51,6 +52,7 @@ export class BookTableComponent implements OnInit, AfterViewInit, OnDestroy, OnC
 
   @Output() selectedBooksChange = new EventEmitter<Set<number>>();
   @Output() viewportScroll = new EventEmitter<TableViewportMetrics>();
+  @Output() reviewRequested = new EventEmitter<Book>();
   @Input() books: Book[] = [];
   @Input() sortOption: SortOption | null = null;
   @Input() visibleColumns: { field: string; header: string }[] = [];
@@ -58,6 +60,8 @@ export class BookTableComponent implements OnInit, AfterViewInit, OnDestroy, OnC
   @Input() showSubtitle = false;
   @Input() forceFileNameTitle = false;
   @Input() pagedPilotActive = false;
+  @Input() reviewActionEnabled = false;
+  @Input() showStagingIsbnProblem = false;
 
   protected urlHelper = inject(UrlHelperService);
   private bookMetadataManageService = inject(BookMetadataManageService);
@@ -70,6 +74,7 @@ export class BookTableComponent implements OnInit, AfterViewInit, OnDestroy, OnC
   private cdr = inject(ChangeDetectorRef);
   private router = inject(Router);
   private bookSelectionService = inject(BookSelectionService);
+  private mobileUx = inject(MobileUxService);
 
   readonly starRange = [1, 2, 3, 4, 5];
   readonly virtualScrollOptions: ScrollerOptions = {
@@ -586,6 +591,58 @@ export class BookTableComponent implements OnInit, AfterViewInit, OnDestroy, OnC
       event.dataTransfer.setData('text/plain', JSON.stringify({ bookIds, sourceShelfId }));
       event.dataTransfer.effectAllowed = 'move';
     }
+  }
+
+  get isReviewActionEnabled(): boolean {
+    return this.reviewActionEnabled && !this.mobileUx.isPhone;
+  }
+
+  get reviewTooltip(): string {
+    return this.t.translate('book.browser.tooltip.openMetadataReview');
+  }
+
+  getStagingIsbnProblemStatus(book: Book): IsbnDiscoveryStatus | null {
+    if (!this.showStagingIsbnProblem || this.mobileUx.isPhone) {
+      return null;
+    }
+    return book.isbnDiscoveryStatus === IsbnDiscoveryStatus.NOT_FOUND
+      || book.isbnDiscoveryStatus === IsbnDiscoveryStatus.ERROR
+      ? book.isbnDiscoveryStatus
+      : null;
+  }
+
+  getStagingIsbnProblemTooltip(book: Book): string {
+    const status = this.getStagingIsbnProblemStatus(book);
+    const titleKey = status === IsbnDiscoveryStatus.NOT_FOUND
+      ? 'book.card.isbnDiscoveryStatus.notFound'
+      : 'book.card.isbnDiscoveryStatus.error';
+    const title = this.t.translate(titleKey);
+    const detail = book.isbnDiscoveryDetail?.trim();
+    const checkedAt = book.isbnDiscoveryCheckedAt
+      ? new Date(book.isbnDiscoveryCheckedAt).toLocaleString()
+      : null;
+    return [title, detail, checkedAt].filter(Boolean).join(' — ');
+  }
+
+  onStagingIsbnProblemClick(event: Event, book: Book): void {
+    event.stopPropagation();
+    const status = this.getStagingIsbnProblemStatus(book);
+    if (!status) {
+      return;
+    }
+    this.messageService.add({
+      severity: status === IsbnDiscoveryStatus.ERROR ? 'error' : 'warn',
+      summary: this.t.translate(status === IsbnDiscoveryStatus.NOT_FOUND
+        ? 'book.card.isbnDiscoveryStatus.notFound'
+        : 'book.card.isbnDiscoveryStatus.error'),
+      detail: this.getStagingIsbnProblemTooltip(book),
+      life: 5000,
+    });
+  }
+
+  onReviewActionClick(event: Event, book: Book): void {
+    event.stopPropagation();
+    this.reviewRequested.emit(book);
   }
 
   ngOnDestroy(): void {

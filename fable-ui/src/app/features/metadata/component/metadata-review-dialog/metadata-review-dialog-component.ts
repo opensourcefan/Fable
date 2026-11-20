@@ -5,7 +5,8 @@ import {FetchedProposal, MetadataTaskService} from '../../../book/service/metada
 import {BookService} from '../../../book/service/book.service';
 import {Book} from '../../../book/model/book.model';
 import {BehaviorSubject, Observable, of} from 'rxjs';
-import {finalize, map, switchMap, tap} from 'rxjs/operators';
+import {filter, finalize, map, switchMap, tap} from 'rxjs/operators';
+import {MessageService} from 'primeng/api';
 import {Button} from 'primeng/button';
 import {ProgressBar} from 'primeng/progressbar';
 import {Tooltip} from 'primeng/tooltip';
@@ -37,6 +38,7 @@ export class MetadataReviewDialogComponent implements OnInit {
   private bookMetadataManageService = inject(BookMetadataManageService);
   private progressService = inject(MetadataProgressService);
   private notificationEventService = inject(NotificationEventService);
+  private messageService = inject(MessageService, {optional: true});
   private destroyRef = inject(DestroyRef);
 
   proposals: FetchedProposal[] = [];
@@ -66,31 +68,46 @@ export class MetadataReviewDialogComponent implements OnInit {
 
     this.metadataTaskService.getTaskWithProposals(taskId).subscribe({
       next: (task) => {
-        this.proposals = task.proposals || [];
-        const bookIds = new Set(this.proposals.map(p => p.bookId));
+        const fetchedProposals = task.proposals || [];
+        const bookIds = new Set(fetchedProposals.map(p => p.bookId));
 
         this.bookService.bookState$
           .pipe(
-            map(bookState => bookState.books?.filter(book => bookIds.has(book.id)) ?? []),
+            filter(bookState => bookState.loaded && bookState.books !== null),
             takeUntilDestroyed(this.destroyRef)
           )
-          .subscribe((matchedBooks) => {
-
-            if (!this.initialized && matchedBooks.length === bookIds.size) {
-              this.currentBooks = matchedBooks.reduce((map, book) => {
-                map[book.id] = book;
-                return map;
-              }, {} as Record<number, Book>);
-              this.loading = false;
-              const requestedIndex = typeof initialBookId === 'number'
-                ? this.proposals.findIndex(proposal => proposal.bookId === initialBookId)
-                : -1;
-              this.currentIndex = requestedIndex >= 0 ? requestedIndex : 0;
-              this.currentIndexSubject.next(this.currentIndex);
-              this.initialized = true;
-            } else if (!this.initialized) {
-              this.loading = true;
+          .subscribe((bookState) => {
+            if (this.initialized) {
+              return;
             }
+            const matchedBooks = (bookState.books ?? []).filter(book => bookIds.has(book.id));
+            const matchedBookMap = matchedBooks.reduce((acc, book) => {
+              acc[book.id] = book;
+              return acc;
+            }, {} as Record<number, Book>);
+
+            this.proposals = fetchedProposals.filter(proposal => Boolean(matchedBookMap[proposal.bookId]));
+            if (this.proposals.length === 0) {
+              this.loading = false;
+              this.initialized = true;
+              this.messageService?.add({
+                severity: 'info',
+                summary: 'Metadata Review',
+                detail: 'No reviewable books remain for this task.',
+                life: 3500,
+              });
+              this.dialogRef.close();
+              return;
+            }
+
+            this.currentBooks = matchedBookMap;
+            this.loading = false;
+            const requestedIndex = typeof initialBookId === 'number'
+              ? this.proposals.findIndex(proposal => proposal.bookId === initialBookId)
+              : -1;
+            this.currentIndex = requestedIndex >= 0 ? requestedIndex : 0;
+            this.currentIndexSubject.next(this.currentIndex);
+            this.initialized = true;
           });
       },
       error: () => {

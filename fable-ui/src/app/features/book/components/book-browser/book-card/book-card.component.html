@@ -65,20 +65,22 @@
     </div>
 
     @if (stagingIsbnProblemStatus; as isbnStatus) {
-      <div
+      <button
+        type="button"
         class="staging-isbn-problem-overlay"
         [class.staging-isbn-problem-overlay--not-found]="isbnStatus === 'NOT_FOUND'"
         [class.staging-isbn-problem-overlay--error]="isbnStatus === 'ERROR'"
         [pTooltip]="stagingIsbnProblemTooltip"
         tooltipPosition="top"
-        role="img"
-        [attr.aria-label]="stagingIsbnProblemTooltip">
+        style="padding: 0; cursor: pointer;"
+        [attr.aria-label]="stagingIsbnProblemTooltip"
+        (click)="onStagingIsbnProblemClick($event)">
         <i
           class="pi"
           [class.pi-barcode]="isbnStatus === 'NOT_FOUND'"
           [class.pi-exclamation-triangle]="isbnStatus === 'ERROR'"
           aria-hidden="true"></i>
-      </div>
+      </button>
     }
 
     @if (_isSeriesViewActive) {
