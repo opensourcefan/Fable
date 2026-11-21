@@ -790,7 +790,14 @@ export class SeriesPageComponent implements OnDestroy, AfterViewChecked {
   }
 
   fetchMetadata(): void {
-    this.dialogHelperService.openMetadataRefreshDialog(this.selectedBooks);
+    this.dialogRef = this.dialogHelperService.openMetadataRefreshDialog(this.selectedBooks);
+    if (this.dialogRef) {
+      this.dialogRef.onClose.subscribe((result?: {submitted?: boolean}) => {
+        if (result?.submitted) {
+          this.deselectAllBooks();
+        }
+      });
+    }
   }
 
   bulkEditMetadata(): void {

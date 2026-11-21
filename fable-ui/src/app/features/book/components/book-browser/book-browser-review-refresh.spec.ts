@@ -155,4 +155,62 @@ describe('BookBrowserComponent metadata review refresh', () => {
     confirmArg.accept();
     expect(executeReleaseFromStaging).toHaveBeenCalledWith(new Set([1, 2, 3]));
   });
+
+  it('deselects books when custom metadata fetch dialog is submitted and preserves selection on cancel', () => {
+    const onCloseSubmitted = new Subject<{submitted?: boolean} | undefined>();
+    const onCloseCancelled = new Subject<{submitted?: boolean} | undefined>();
+    const deselectAllBooks = vi.fn();
+    const openMetadataRefreshDialog = vi.fn()
+      .mockReturnValueOnce({onClose: onCloseSubmitted})
+      .mockReturnValueOnce({onClose: onCloseCancelled});
+    const componentLike = {
+      selectedBooks: new Set([1, 2]),
+      destroy$: new Subject<void>(),
+      dynamicDialogRef: null as unknown,
+      dialogHelperService: {openMetadataRefreshDialog},
+      deselectAllBooks,
+    };
+
+    const fetchMetadata = (BookBrowserComponent.prototype as unknown as {
+      fetchMetadata: () => void;
+    }).fetchMetadata;
+
+    fetchMetadata.call(componentLike);
+    onCloseSubmitted.next({submitted: true});
+    expect(deselectAllBooks).toHaveBeenCalledTimes(1);
+
+    fetchMetadata.call(componentLike);
+    onCloseCancelled.next(undefined);
+    expect(deselectAllBooks).toHaveBeenCalledTimes(1);
+  });
+
+  it('prunes selected Staging books that moved out of the active triage tab', () => {
+    const deselectAll = vi.fn();
+    const setSelectedBooks = vi.fn();
+    const componentLike = {
+      entityType: EntityType.STAGING,
+      stagingTriageMode: 'staging',
+      stagingInboxBookIds: new Set([2]),
+      stagingCompletedBookIds: new Set([1]),
+      pendingReviewBookIds: new Set<number>(),
+      bookSelectionService: {
+        selectedBooks: new Set([1, 2]),
+        deselectAll,
+        setSelectedBooks,
+      },
+    };
+
+    const pruneSelectionsOutsideActiveStagingTab = (BookBrowserComponent.prototype as unknown as {
+      pruneSelectionsOutsideActiveStagingTab: () => void;
+    }).pruneSelectionsOutsideActiveStagingTab;
+
+    pruneSelectionsOutsideActiveStagingTab.call(componentLike);
+    expect(setSelectedBooks).toHaveBeenCalledWith(new Set([2]));
+    expect(deselectAll).not.toHaveBeenCalled();
+
+    componentLike.stagingInboxBookIds = new Set<number>();
+    componentLike.bookSelectionService.selectedBooks = new Set([2]);
+    pruneSelectionsOutsideActiveStagingTab.call(componentLike);
+    expect(deselectAll).toHaveBeenCalledOnce();
+  });
 });

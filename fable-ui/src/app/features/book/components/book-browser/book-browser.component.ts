@@ -1113,6 +1113,8 @@ export class BookBrowserComponent implements OnInit, AfterViewInit, OnDestroy {
             this.syncStagingTriageModeQuery('staging');
           }
 
+          this.pruneSelectionsOutsideActiveStagingTab?.();
+
           const signature = [
             this.stagingTriageMode,
             this.stagingInboxCount,
@@ -1140,6 +1142,39 @@ export class BookBrowserComponent implements OnInit, AfterViewInit, OnDestroy {
           }
         }
       });
+  }
+
+  private pruneSelectionsOutsideActiveStagingTab(): void {
+    if (this.entityType !== EntityType.STAGING || !this.bookSelectionService) {
+      return;
+    }
+    const selected = this.bookSelectionService.selectedBooks;
+    if (!selected || selected.size === 0) {
+      return;
+    }
+    const activeIds = this.stagingTriageMode === 'review'
+      ? this.pendingReviewBookIds
+      : this.stagingTriageMode === 'completed'
+        ? this.stagingCompletedBookIds
+        : this.stagingInboxBookIds;
+
+    let removedAny = false;
+    const remaining = new Set<number>();
+    selected.forEach(id => {
+      if (activeIds.has(id)) {
+        remaining.add(id);
+      } else {
+        removedAny = true;
+      }
+    });
+    if (!removedAny) {
+      return;
+    }
+    if (remaining.size === 0) {
+      this.bookSelectionService.deselectAll();
+    } else {
+      this.bookSelectionService.setSelectedBooks(remaining);
+    }
   }
 
   setStagingTriageMode(mode: StagingTriageMode): void {
@@ -2593,7 +2628,16 @@ export class BookBrowserComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   fetchMetadata(): void {
-    this.dialogHelperService.openMetadataRefreshDialog(this.selectedBooks);
+    this.dynamicDialogRef = this.dialogHelperService.openMetadataRefreshDialog(this.selectedBooks);
+    if (this.dynamicDialogRef) {
+      this.dynamicDialogRef.onClose
+        .pipe(take(1), takeUntil(this.destroy$))
+        .subscribe((result?: {submitted?: boolean}) => {
+          if (result?.submitted) {
+            this.deselectAllBooks();
+          }
+        });
+    }
   }
 
   bulkEditMetadata(): void {

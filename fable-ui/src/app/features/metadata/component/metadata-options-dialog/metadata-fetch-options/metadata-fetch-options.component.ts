@@ -183,7 +183,7 @@ export class MetadataFetchOptionsComponent {
       olderThanDays: this.targetMode === 'OLDER_THAN_DAYS' ? this.olderThanDays : null,
     };
     this.taskHelperService.refreshMetadataTask(metadataRefreshRequest).subscribe();
-    this.dynamicDialogRef.close();
+    this.dynamicDialogRef.close({submitted: true});
   }
 
   resumeLatestTask(): void {
